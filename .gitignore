@@ -1,0 +1,21 @@
+# Build
+build/
+*.o
+*.exe
+*.a
+*.dll
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Assets temporários
+*.tmp
+*.bak
