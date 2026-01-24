@@ -1,0 +1,22 @@
+---
+description: Commit e push após alterações — mantém linha do tempo no repositório
+alwaysApply: true
+---
+
+# Linha do tempo no Git
+
+Sempre que fizer alterações no código (edits, novos arquivos, remoções):
+
+1. **Ao concluir** o conjunto de mudanças pedido pelo usuário, execute:
+   - `git add -A` (ou `git add` nos caminhos alterados, se preferir granular)
+   - `git commit -m "descrição clara e objetiva do que mudou"`
+   - `git push`
+
+2. **Mensagem de commit**: em português, direta. Exemplos:
+   - `feat: sliders de FOV e sens com smoothing visual e pulse no knob`
+   - `fix: clamp em fovT e sensT usando g_uiAnim`
+   - `refactor: extrai LerpFloat e SmoothTo para reuso`
+
+3. **Evite** commit+push no meio de uma tarefa dividida em vários passos; faça **após** entregar a alteração completa.
+
+4. **Se o push falhar** (conflito, rede, etc.), informe o usuário e não insista em loop.
