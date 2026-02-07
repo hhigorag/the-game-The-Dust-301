@@ -1,60 +1,49 @@
 #include "app/scenes/scene_manager.h"
 #include "app/scenes/scene_menu.h"
-#include "app/scenes/scene_terminal_lobby.h"
 #include "app/scenes/scene_gameplay.h"
 #include <raylib.h>
 
-static SceneType g_currentScene = SCENE_MENU;
+static SceneId g_currentScene = SCENE_MENU_MAIN;
+
+static const Scene g_scenes[SCENE_COUNT] = {
+    [SCENE_MENU_MAIN] = {
+        .Init    = Scene_Menu_Init,
+        .Shutdown = Scene_Menu_Shutdown,
+        .Update  = Scene_Menu_Update,
+        .Draw    = Scene_Menu_Draw,
+    },
+    [SCENE_GAMEPLAY] = {
+        .Init    = Scene_Gameplay_Init,
+        .Shutdown = Scene_Gameplay_Shutdown,
+        .Update  = Scene_Gameplay_Update,
+        .Draw    = Scene_Gameplay_Draw,
+    },
+};
 
 void SceneManager_Init(void) {
-    g_currentScene = SCENE_MENU;
-    Scene_Menu_Init();
-    Scene_TerminalLobby_Init();
-    Scene_Gameplay_Init();
+    g_currentScene = SCENE_MENU_MAIN;
+    g_scenes[SCENE_MENU_MAIN].Init();
 }
 
-void SceneManager_SetScene(SceneType scene) {
-    if (scene >= SCENE_COUNT) return;
-    g_currentScene = scene;
+void SceneManager_Shutdown(void) {
+    g_scenes[g_currentScene].Shutdown();
 }
 
-SceneType SceneManager_GetCurrentScene(void) {
+void SceneManager_Change(SceneId next) {
+    if (next >= SCENE_COUNT) return;
+    g_scenes[g_currentScene].Shutdown();
+    g_currentScene = next;
+    g_scenes[g_currentScene].Init();
+}
+
+SceneId SceneManager_GetCurrent(void) {
     return g_currentScene;
 }
 
 void SceneManager_Update(float dt) {
-    switch (g_currentScene) {
-        case SCENE_MENU:
-            Scene_Menu_Update(dt);
-            break;
-        case SCENE_TERMINAL_LOBBY:
-            Scene_TerminalLobby_Update(dt);
-            break;
-        case SCENE_GAMEPLAY:
-            Scene_Gameplay_Update(dt);
-            break;
-        default:
-            break;
-    }
+    g_scenes[g_currentScene].Update(dt);
 }
 
 void SceneManager_Draw(void) {
-    BeginDrawing();
-    ClearBackground(BLACK);
-    
-    switch (g_currentScene) {
-        case SCENE_MENU:
-            Scene_Menu_Draw();
-            break;
-        case SCENE_TERMINAL_LOBBY:
-            Scene_TerminalLobby_Draw();
-            break;
-        case SCENE_GAMEPLAY:
-            Scene_Gameplay_Draw();
-            break;
-        default:
-            break;
-    }
-    
-    EndDrawing();
+    g_scenes[g_currentScene].Draw();
 }

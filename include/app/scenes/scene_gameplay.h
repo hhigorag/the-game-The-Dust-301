@@ -4,5 +4,6 @@
 void Scene_Gameplay_Init(void);
 void Scene_Gameplay_Update(float dt);
 void Scene_Gameplay_Draw(void);
+void Scene_Gameplay_Shutdown(void);
 
 #endif // SCENE_GAMEPLAY_H

@@ -10,6 +10,10 @@ int App_Init(int width, int height, const char* title) {
     SetTargetFPS(60);
     InitAudioDevice();
     
+    // Desabilita ESC fechar a janela automaticamente
+    // Agora ESC é tratado manualmente em cada cena
+    SetExitKey(0);
+    
     g_initialized = true;
     return 0;
 }

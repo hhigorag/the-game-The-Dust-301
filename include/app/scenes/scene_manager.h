@@ -1,27 +1,25 @@
 #ifndef SCENE_MANAGER_H
 #define SCENE_MANAGER_H
 
-// Tipos de cenas
-typedef enum {
-    SCENE_MENU,
-    SCENE_TERMINAL_LOBBY,
-    SCENE_GAMEPLAY,
+typedef enum SceneId {
+    SCENE_MENU_MAIN = 0,
+    SCENE_GAMEPLAY   = 1,
     SCENE_COUNT
-} SceneType;
+} SceneId;
 
-// Inicializa o SceneManager
+typedef struct Scene {
+    void (*Init)(void);
+    void (*Shutdown)(void);
+    void (*Update)(float dt);
+    void (*Draw)(void);
+} Scene;
+
 void SceneManager_Init(void);
-
-// Define a cena atual
-void SceneManager_SetScene(SceneType scene);
-
-// Retorna a cena atual
-SceneType SceneManager_GetCurrentScene(void);
-
-// Atualiza a cena atual
+void SceneManager_Shutdown(void);
+void SceneManager_Change(SceneId next);
 void SceneManager_Update(float dt);
-
-// Desenha a cena atual
 void SceneManager_Draw(void);
+
+SceneId SceneManager_GetCurrent(void);
 
 #endif // SCENE_MANAGER_H

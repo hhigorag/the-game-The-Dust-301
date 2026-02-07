@@ -1,0 +1,14 @@
+---
+description: Camadas e responsabilidades do projeto. Scene orquestra; Render obedece; Atmosphere dá parâmetros. Consultar md/ARCHITECTURE.md ao tocar em cenas, render, atmosphere, world, entity ou ao avaliar includes.
+globs:
+  - "src/app/scenes/**"
+  - "src/app/render/**"
+  - "include/app/render/**"
+  - "include/app/scenes/**"
+---
+
+# Regra de arquitetura
+
+- **Doc completa:** `md/ARCHITECTURE.md`
+- **Regra de ouro:** Se um `#include` (ou acoplamento entre camadas) parece errado, provavelmente é.
+- **Scene** manda (o quê e quando); **Render** obedece (como). **Atmosphere** só dados e fallback do céu; fog/iluminação ficam nos shaders e em `lighting.c`.

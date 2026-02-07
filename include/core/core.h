@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Forward declaration
+typedef struct NetSystem NetSystem;
+
 // Inicializa o sistema Core
 int Core_Init(void);
 
@@ -15,5 +18,8 @@ void Core_Shutdown(void);
 
 // Verifica se o Core está inicializado
 bool Core_IsInitialized(void);
+
+// Retorna o NetSystem (para uso externo)
+NetSystem* Core_GetNetSystem(void);
 
 #endif // CORE_H

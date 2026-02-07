@@ -1,29 +1,78 @@
-#ifndef PLAYER_H
-#define PLAYER_H
+#ifndef PLAYER_CONTROLLER_H
+#define PLAYER_CONTROLLER_H
 
-#include <stdint.h>
+#include "core/math/core_math.h"
 #include <stdbool.h>
 
-// Estrutura de um comando de input
+// ============================================================================
+// PLAYER CONTROLLER (Física/Movimento Local)
+// ============================================================================
+// Gerencia posição, velocidade e movimento do player local.
+// NOTA: Este é diferente de Player em game_state.h (que é para multiplayer).
+// Movimento usa forward_flat (projetado no plano XZ) para que
+// pitch não afete movimento horizontal.
+// ============================================================================
+
 typedef struct {
-    float moveX;
-    float moveY;
-    uint32_t buttons;
-} InputCmd;
+    // Posição e velocidade
+    Vec3 position;
+    Vec3 velocity;
+    
+    // Propriedades físicas
+    float speed;        // Velocidade de movimento (m/s)
+    float sprintSpeed; // Velocidade de sprint (m/s)
+    float height;       // Altura do player (capsule ou AABB)
+    float radius;       // Raio do player (capsule) ou metade da largura (AABB)
+    
+    // Estados
+    bool onGround;      // Está no chão?
+    bool isSprinting;    // Está correndo?
+    
+    // Debug
+    bool debugMode;     // Mostra informações de debug?
+} PlayerController;
 
-// Aplica um comando de input a um player
-void Player_ApplyInput(uint32_t playerId, const InputCmd* cmd, float dt);
+// ============================================================================
+// INICIALIZAÇÃO
+// ============================================================================
 
-// Atualiza um player (física, etc.)
-void Player_Update(uint32_t playerId, float dt);
+void PlayerController_Init(PlayerController* player, Vec3 startPos);
 
-// Retorna a posição X de um player
-float Player_GetX(uint32_t playerId);
+// ============================================================================
+// MOVIMENTO
+// ============================================================================
+// forward_flat: direção forward projetada no plano XZ (sem componente Y)
+// right_flat: direção right projetada no plano XZ
+// wishdir: direção desejada de movimento (normalizada)
+// ============================================================================
 
-// Retorna a posição Y de um player
-float Player_GetY(uint32_t playerId);
+// Atualiza movimento do player baseado em wishdir (direção desejada)
+// wishdir deve estar normalizado e no plano XZ
+void PlayerController_ApplyMovement(PlayerController* player, Vec3 wishdir, float dt);
 
-// Retorna o ângulo de um player
-float Player_GetAngle(uint32_t playerId);
+// ============================================================================
+// FÍSICA
+// ============================================================================
 
-#endif // PLAYER_H
+// Aplica gravidade
+void PlayerController_ApplyGravity(PlayerController* player, float gravity, float dt);
+
+// Atualiza posição baseada na velocidade
+void PlayerController_UpdatePosition(PlayerController* player, float dt);
+
+// ============================================================================
+// COLISÃO (STUB)
+// ============================================================================
+
+// Verifica e resolve colisão com o mundo
+// Retorna true se houve colisão
+// TODO: Implementar colisão real com chunks/blocos
+bool PlayerController_CheckCollision(PlayerController* player, Vec3* newPos);
+
+// ============================================================================
+// DEBUG
+// ============================================================================
+
+void PlayerController_PrintDebug(const PlayerController* player);
+
+#endif // PLAYER_CONTROLLER_H

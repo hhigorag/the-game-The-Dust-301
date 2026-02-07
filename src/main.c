@@ -2,6 +2,7 @@
 #include "core/core.h"
 #include "core/net/net.h"
 #include "core/time.h"
+#include "app/settings/settings.h"
 #include "app/scenes/scene_manager.h"
 #include <stdio.h>
 
@@ -22,15 +23,7 @@ int main(void) {
         return 1;
     }
     
-    // Inicializa Rede
-    if (Net_Init() != 0) {
-        fprintf(stderr, "Erro ao inicializar Rede\n");
-        Core_Shutdown();
-        App_Shutdown();
-        return 1;
-    }
-    
-    // Inicializa SceneManager
+    Settings_SetDefaults();
     SceneManager_Init();
     
     // Loop principal único
@@ -38,10 +31,7 @@ int main(void) {
         // Calcula dt
         float dt = Time_GetDeltaTime();
         
-        // Poll de rede (todo frame)
-        Net_Poll();
-        
-        // Atualiza Core (lógica do jogo)
+        // Atualiza Core (lógica do jogo) - Net_Poll é chamado dentro de Core_Tick
         Core_Tick(dt);
         
         // Atualiza Scene (UI + input)
@@ -51,9 +41,7 @@ int main(void) {
         SceneManager_Draw();
     }
     
-    // Finaliza tudo
-    SceneManager_SetScene(SCENE_MENU); // Garante que não há referências pendentes
-    Net_Shutdown();
+    SceneManager_Shutdown();
     Core_Shutdown();
     App_Shutdown();
     

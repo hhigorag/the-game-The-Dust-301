@@ -2,71 +2,94 @@
 #define PROTOCOL_H
 
 #include <stdint.h>
+#include <stdbool.h>
+
+#define MAX_LOBBY_PLAYERS 8
+
+#pragma pack(push, 1)
 
 // Tipos de pacotes de rede
 typedef enum {
-    PKT_JOIN = 0,
-    PKT_WELCOME,
-    PKT_PLAYER_JOINED,
-    PKT_LOBBY_CONFIG,
-    PKT_START_RUN,
-    PKT_INPUT,
-    PKT_SNAPSHOT,
-    PKT_EVENT,
-    PKT_COUNT
+    PKT_JOIN = 1,
+    PKT_WELCOME = 2,
+    PKT_PING = 3,
+    PKT_PLAYER_JOINED = 4,
+    PKT_LOBBY_CONFIG = 5,
+    PKT_START_RUN = 6,
+    PKT_INPUT = 7,
+    PKT_SNAPSHOT = 8,
+    PKT_EVENT = 9
 } PacketType;
 
-// Estrutura base de um pacote
+// Header base de pacote
 typedef struct {
-    uint8_t type;
-    uint16_t size;
-    uint32_t sequence;
-} PacketHeader;
+    uint8_t type;        // PacketType
+    uint16_t size;       // bytes do pacote inteiro (inclui header)
+} PktHeader;
 
-// Estrutura de JOIN
+// JOIN: client -> host
 typedef struct {
-    PacketHeader header;
-    char name[32];
-} JoinPacket;
+    PktHeader h;
+    char name[24];
+} PktJoin;
 
-// Estrutura de WELCOME
+// WELCOME: host -> client
 typedef struct {
-    PacketHeader header;
-    uint32_t playerId;
-    uint32_t hostId;
-} WelcomePacket;
+    PktHeader h;
+    uint32_t yourId;
+} PktWelcome;
 
-// Estrutura de START_RUN
+// LOBBY_CONFIG: host -> client
 typedef struct {
-    PacketHeader header;
+    PktHeader h;
     uint32_t seed;
     char destination[64];
-} StartRunPacket;
+} PktLobbyConfig;
 
-// Estrutura de INPUT
+// LOBBY_UPDATE: host -> client (atualiza lista de players)
 typedef struct {
-    PacketHeader header;
+    PktHeader h;
+    uint8_t playerCount;
+    struct {
+        uint32_t id;
+        char name[32];
+        bool ready;
+        bool isHost;
+    } players[MAX_LOBBY_PLAYERS];
+} PktLobbyUpdate;
+
+// START_RUN: host -> client
+typedef struct {
+    PktHeader h;
+    uint32_t seed;
+    char destination[64];
+} PktStartRun;
+
+// INPUT: client -> host
+typedef struct {
+    PktHeader h;
     uint32_t playerId;
     float moveX;
     float moveY;
     uint32_t buttons;
-} InputPacket;
+} PktInput;
 
-// Estrutura de SNAPSHOT
+// SNAPSHOT: host -> client
 typedef struct {
-    PacketHeader header;
+    PktHeader h;
     uint32_t tick;
-    // Dados do mundo (serializados)
     uint8_t data[1024];
     uint16_t dataSize;
-} SnapshotPacket;
+} PktSnapshot;
 
-// Estrutura de EVENT
+// EVENT: host -> client
 typedef struct {
-    PacketHeader header;
+    PktHeader h;
     uint8_t eventType;
     uint8_t data[256];
     uint16_t dataSize;
-} EventPacket;
+} PktEvent;
+
+#pragma pack(pop)
 
 #endif // PROTOCOL_H

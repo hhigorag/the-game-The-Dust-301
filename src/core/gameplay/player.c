@@ -1,73 +1,122 @@
 #include "core/gameplay/player.h"
-#include "core/state/game_state.h"
-#include <math.h>
+#include <stdio.h>
 
-void Player_ApplyInput(uint32_t playerId, const InputCmd* cmd, float dt) {
-    if (!cmd) return;
+// Nota: Este arquivo foi renomeado de player.h para player_controller.h
+// mas mantém compatibilidade com includes antigos
+
+// ============================================================================
+// CONSTANTES
+// ============================================================================
+
+#define DEFAULT_SPEED 5.0f
+#define DEFAULT_SPRINT_SPEED 8.0f
+#define DEFAULT_HEIGHT 1.8f
+#define DEFAULT_RADIUS 0.3f
+
+// ============================================================================
+// INICIALIZAÇÃO
+// ============================================================================
+
+void PlayerController_Init(PlayerController* player, Vec3 startPos) {
+    if (!player) return;
     
-    GameState* state = GameState_Get();
-    if (!state || !state->initialized) return;
+    player->position = startPos;
+    player->velocity = Vec3_Zero();
+    player->speed = DEFAULT_SPEED;
+    player->sprintSpeed = DEFAULT_SPRINT_SPEED;
+    player->height = DEFAULT_HEIGHT;
+    player->radius = DEFAULT_RADIUS;
+    player->onGround = false;
+    player->isSprinting = false;
+    player->debugMode = false;
+}
+
+// ============================================================================
+// MOVIMENTO
+// ============================================================================
+
+void PlayerController_ApplyMovement(PlayerController* player, Vec3 wishdir, float dt) {
+    if (!player) return;
     
-    // Encontra o player
-    Player* player = NULL;
-    for (int i = 0; i < state->playerCount; i++) {
-        if (state->players[i].id == playerId) {
-            player = &state->players[i];
-            break;
-        }
-    }
+    // Garante que wishdir está normalizado
+    Vec3 normalized = Vec3_Normalize(wishdir);
     
-    if (!player || !player->connected) return;
+    // Calcula velocidade atual (sprint ou normal)
+    float currentSpeed = player->isSprinting ? player->sprintSpeed : player->speed;
     
-    // Aplica movimento
-    float speed = 100.0f; // pixels por segundo
-    player->x += cmd->moveX * speed * dt;
-    player->y += cmd->moveY * speed * dt;
+    // Aplica movimento no plano XZ (ignora componente Y de wishdir)
+    // Isso garante que pitch não afeta movimento horizontal
+    Vec3 move = Vec3_Scale(normalized, currentSpeed * dt);
     
-    // Atualiza ângulo se houver movimento
-    if (cmd->moveX != 0.0f || cmd->moveY != 0.0f) {
-        player->angle = atan2f(cmd->moveY, cmd->moveX);
+    // Atualiza velocidade horizontal (mantém Y separado para gravidade)
+    player->velocity.x = move.x / dt;
+    player->velocity.z = move.z / dt;
+    
+    // Atualiza posição diretamente (colisão será aplicada depois)
+    player->position.x += move.x;
+    player->position.z += move.z;
+}
+
+// ============================================================================
+// FÍSICA
+// ============================================================================
+
+void PlayerController_ApplyGravity(PlayerController* player, float gravity, float dt) {
+    if (!player) return;
+    
+    // Aplica gravidade apenas se não estiver no chão
+    if (!player->onGround) {
+        player->velocity.y += gravity * dt;
+    } else {
+        // Se está no chão, zera velocidade Y (ou aplica atrito)
+        player->velocity.y = 0.0f;
     }
 }
 
-void Player_Update(uint32_t playerId, float dt) {
-    // Atualizações de física, etc.
-    (void)playerId;
-    (void)dt;
+void PlayerController_UpdatePosition(PlayerController* player, float dt) {
+    if (!player) return;
+    
+    // Atualiza posição baseada na velocidade
+    Vec3 delta = Vec3_Scale(player->velocity, dt);
+    
+    // Verifica colisão antes de mover
+    Vec3 newPos = Vec3_Add(player->position, delta);
+    
+    if (PlayerController_CheckCollision(player, &newPos)) {
+        // Colisão detectada, ajusta posição
+        // Por enquanto, apenas atualiza (colisão real será implementada depois)
+    }
+    
+    player->position = newPos;
 }
 
-float Player_GetX(uint32_t playerId) {
-    GameState* state = GameState_Get();
-    if (!state) return 0.0f;
+// ============================================================================
+// COLISÃO (STUB)
+// ============================================================================
+
+bool PlayerController_CheckCollision(PlayerController* player, Vec3* newPos) {
+    if (!player || !newPos) return false;
     
-    for (int i = 0; i < state->playerCount; i++) {
-        if (state->players[i].id == playerId) {
-            return state->players[i].x;
-        }
-    }
-    return 0.0f;
+    // TODO: Implementar colisão real com chunks/blocos
+    // Por enquanto, apenas verifica limites básicos do mundo
+    // (implementação real deve verificar AABB do player vs blocos sólidos)
+    
+    // Stub: sempre permite movimento
+    return false;
 }
 
-float Player_GetY(uint32_t playerId) {
-    GameState* state = GameState_Get();
-    if (!state) return 0.0f;
-    
-    for (int i = 0; i < state->playerCount; i++) {
-        if (state->players[i].id == playerId) {
-            return state->players[i].y;
-        }
-    }
-    return 0.0f;
-}
+// ============================================================================
+// DEBUG
+// ============================================================================
 
-float Player_GetAngle(uint32_t playerId) {
-    GameState* state = GameState_Get();
-    if (!state) return 0.0f;
+void PlayerController_PrintDebug(const PlayerController* player) {
+    if (!player) return;
     
-    for (int i = 0; i < state->playerCount; i++) {
-        if (state->players[i].id == playerId) {
-            return state->players[i].angle;
-        }
-    }
-    return 0.0f;
+    printf("[PLAYER] Pos: (%.2f, %.2f, %.2f)\n",
+           player->position.x, player->position.y, player->position.z);
+    printf("[PLAYER] Vel: (%.2f, %.2f, %.2f)\n",
+           player->velocity.x, player->velocity.y, player->velocity.z);
+    printf("[PLAYER] Speed: %.2f (sprint: %.2f)\n",
+           player->speed, player->sprintSpeed);
+    printf("[PLAYER] OnGround: %s\n", player->onGround ? "YES" : "NO");
 }

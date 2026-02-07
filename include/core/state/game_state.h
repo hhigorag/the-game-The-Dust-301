@@ -6,14 +6,14 @@
 
 #define MAX_PLAYERS 8
 
-// Estrutura de um player
+// Estrutura de um player (rede/multiplayer). Não confundir com PlayerController (gameplay local).
 typedef struct {
     uint32_t id;
     float x, y;
     float angle;
     bool connected;
     char name[32];
-} Player;
+} GamePlayer;
 
 // Estrutura do estado da nave
 typedef struct {
@@ -25,7 +25,7 @@ typedef struct {
 
 // Estrutura principal do estado do jogo
 typedef struct {
-    Player players[MAX_PLAYERS];
+    GamePlayer players[MAX_PLAYERS];
     int playerCount;
     ShipState ship;
     uint32_t mapSeed;
