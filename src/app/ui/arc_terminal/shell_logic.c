@@ -389,7 +389,7 @@ void Arc_Shell_Update(ArcShellContext* s, float screenW, float screenH,
                     }
                 }
             } else if (s->navSelected == 0 && mouseLocalY >= dividerY + 8 && mouseLocalX >= wikiDividerX + 20 && mouseLocalX < menuDividerX) {
-                float ly = dividerY + 8 + 28 + 100 + 15;
+                float ly = dividerY + 8 + 15 + 24 + 8 + 15 + 15 + 6*24 + 10 + 15;
                 float lh = 24.0f;
                 for (int i = 0; i < ARC_LANDING_STEPS; i++) {
                     float rowY = ly + i * (lh + 2);

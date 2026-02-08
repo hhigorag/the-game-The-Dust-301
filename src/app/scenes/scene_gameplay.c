@@ -1068,7 +1068,7 @@ void Scene_Gameplay_Update(float dt) {
         bool nearMonitor = (distSq < MONITOR_INTERACT_DIST * MONITOR_INTERACT_DIST);
 
         if (ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
-            EnableCursor();
+            /* Contexto de input do terminal: cursor visível, mouse livre. Gameplay não processa input. */
             FPSCamera_UnlockMouse(&g_fpsCamera);
             ArcTerminalFull_Update(g_arcTerminalFull, dt);
             /* GetCharPressed: caracteres (evita duplicação; não processar teclas via GetKeyPressed). */
@@ -1086,7 +1086,7 @@ void Scene_Gameplay_Update(float dt) {
             }
             if (IsKeyPressed(KEY_E) && ArcTerminalFull_IsInShell(g_arcTerminalFull)) {
                 ArcTerminalFull_Close(g_arcTerminalFull);
-                DisableCursor();
+                /* Volta ao contexto de input da gameplay: cursor oculto, mouse travado. */
                 FPSCamera_LockMouse(&g_fpsCamera);
             }
             g_fpsCamera.fov = g_settings.fov;
