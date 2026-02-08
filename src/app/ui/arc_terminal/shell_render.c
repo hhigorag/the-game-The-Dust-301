@@ -215,8 +215,36 @@ void Arc_Shell_Render(ArcShellContext* s, Font font, Texture2D logo, bool logoOk
             }
             EndScissorMode();
 
+            /* PRIORITY NAVIGATION OPERATIONS panel */
+            float panelHeaderY = dividerY + 8;
+            Arc_DrawShellText(font, "PRIORITY NAVIGATION OPERATIONS | [ MISSION TYPE 301 ]",
+                wikiDividerX + 20, panelHeaderY, 18, (Color){120, 255, 120, 255});
+            float colStartY = panelHeaderY + 28;
+            float colW = (menuDividerX - wikiDividerX - 60.0f) / 3.0f;
+            float col1X = wikiDividerX + 20;
+            float col2X = wikiDividerX + 20 + colW + 10;
+            float col3X = wikiDividerX + 20 + (colW + 10) * 2;
+
+            Arc_DrawShellText(font, "SHIP STATUS:", col1X, colStartY, 16, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "STATUS: ALL RIGHT", col1X, colStartY + 18, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "LOCATION: SPACE", col1X, colStartY + 34, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "ENGINE: STAND BY", col1X, colStartY + 50, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "DOORS: SEALED", col1X, colStartY + 66, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "MAP: NOT GENERATED", col1X, colStartY + 82, 14, ARC_COLOR_GREEN);
+
+            Arc_DrawShellText(font, "SYSTEM NOTES:", col2X, colStartY, 16, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "1 - Map generation unavailable while in orbit.", col2X, colStartY + 18, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "2 - Landing requires stable trajectory.", col2X, colStartY + 34, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "3 - High-risk planets may restrict scanner range.", col2X, colStartY + 50, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "4 - Atmospheric data incomplete.", col2X, colStartY + 66, 14, ARC_COLOR_GREEN);
+
+            Arc_DrawShellText(font, "CREW ADVISORY:", col3X, colStartY, 16, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "Signal interference detected.", col3X, colStartY + 18, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "Anomaly density above safe threshold.", col3X, colStartY + 34, 14, ARC_COLOR_GREEN);
+            Arc_DrawShellText(font, "Proceed with caution.", col3X, colStartY + 50, 14, ARC_COLOR_GREEN);
+
             if (s->navSelected == 0) {
-                float ly = dividerY + 8 + 15 + 15 + 24 + 10 + 15;
+                float ly = dividerY + 8 + 28 + 100 + 15;
                 float lh = 24.0f;
                 float emPanelX = menuDividerX - ARC_EMERGENCY_PANEL_WIDTH;
                 for (int i = 0; i < ARC_LANDING_STEPS; i++) {
@@ -236,6 +264,21 @@ void Arc_Shell_Render(ArcShellContext* s, Font font, Texture2D logo, bool logoOk
                             Arc_DrawShellText(font, "DONE!", emPanelX - 80, rowY, 18, ARC_COLOR_GREEN);
                     }
                 }
+            }
+
+            /* Right panel: TARGETS / MISSIONS */
+            float menuAreaY = 145.0f;
+            Arc_DrawShellText(font, s->navSelected == 0 ? "> TARGETS" : "  TARGETS", menuDividerX + 15, menuAreaY, 18, s->navSelected == 0 ? ARC_COLOR_GREEN : (Color){120, 180, 120, 255});
+            Arc_DrawShellText(font, s->navSelected == 1 ? "> MISSIONS" : "  MISSIONS", menuDividerX + 15, menuAreaY + 45, 18, s->navSelected == 1 ? ARC_COLOR_GREEN : (Color){120, 180, 120, 255});
+
+            /* EMERGENCY panel */
+            float landingStartY = dividerY + 8 + 28 + 100 + 15;
+            float emPanelX = menuDividerX - ARC_EMERGENCY_PANEL_WIDTH;
+            static const char* emergencyNames[] = {"ABORT MISSION", "RETURN TO ORBIT", "DEPART PLANET"};
+            Arc_DrawShellText(font, "EMERGENCY", emPanelX + 10, landingStartY - 50, 16, (Color){180, 80, 80, 255});
+            for (int i = 0; i < 3; i++) {
+                const char* pre = (i == s->landingEmergencySelected) ? ">" : " ";
+                Arc_DrawShellText(font, TextFormat("%s[-] %s", pre, emergencyNames[i]), emPanelX + 10, landingStartY - 30 + i * 22, 14, ARC_COLOR_GREEN);
             }
         }
     } else {

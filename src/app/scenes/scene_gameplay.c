@@ -1068,18 +1068,26 @@ void Scene_Gameplay_Update(float dt) {
         bool nearMonitor = (distSq < MONITOR_INTERACT_DIST * MONITOR_INTERACT_DIST);
 
         if (ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+            EnableCursor();
+            FPSCamera_UnlockMouse(&g_fpsCamera);
+            ArcTerminalFull_Update(g_arcTerminalFull, dt);
+            /* GetCharPressed: caracteres (evita duplicação; não processar teclas via GetKeyPressed). */
             int k = GetCharPressed();
             while (k > 0) {
                 ArcTerminalFull_ProcessKey(g_arcTerminalFull, k);
                 k = GetCharPressed();
             }
+            /* GetKeyPressed: apenas teclas especiais (ENTER, BACKSPACE, setas, TAB, etc.); ignorar letras/números. */
             k = GetKeyPressed();
             while (k != 0) {
-                ArcTerminalFull_ProcessKey(g_arcTerminalFull, k);
+                if (k < 32 || k > 126)
+                    ArcTerminalFull_ProcessKey(g_arcTerminalFull, k);
                 k = GetKeyPressed();
             }
-            if (IsKeyPressed(KEY_E)) {
+            if (IsKeyPressed(KEY_E) && ArcTerminalFull_IsInShell(g_arcTerminalFull)) {
                 ArcTerminalFull_Close(g_arcTerminalFull);
+                DisableCursor();
+                FPSCamera_LockMouse(&g_fpsCamera);
             }
             g_fpsCamera.fov = g_settings.fov;
             g_fpsCamera.position.x = g_playerPhysics.x;
@@ -1763,8 +1771,8 @@ void Scene_Gameplay_Draw(void) {
         } else {
             DrawTextureRec(g_crtTarget.texture, srcRect, (Vector2){0, 0}, WHITE);
         }
-        /* Terminal ARC overlay: 1600x920 centralizado com efeito CRT (crt.fs do terminal-with-raylib). */
-        if (g_arcTerminalFull && ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+        /* Terminal ARC overlay: só desenha se terminal aberto E jogo não pausado (não sobrepõe menu ESC). */
+        if (g_arcTerminalFull && ArcTerminalFull_IsOpen(g_arcTerminalFull) && g_mode != GP_PAUSED) {
             Texture2D tex = ArcTerminalFull_GetTexture(g_arcTerminalFull);
             if (tex.id != 0) {
                 Rectangle ovRect;

@@ -141,6 +141,10 @@ bool ArcTerminalFull_IsOpen(const ArcTerminalFull* t) {
     return t && t->open;
 }
 
+bool ArcTerminalFull_IsInShell(const ArcTerminalFull* t) {
+    return t && t->open && t->state == ARC_STATE_SHELL;
+}
+
 static int norm_enter(int key) {
     return (key == 10 || key == 13 || key == 257) ? KEY_ENTER : key;
 }

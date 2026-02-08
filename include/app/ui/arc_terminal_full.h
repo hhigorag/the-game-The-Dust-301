@@ -15,6 +15,7 @@ void ArcTerminalFull_Destroy(ArcTerminalFull* t);
 void ArcTerminalFull_Open(ArcTerminalFull* t);
 void ArcTerminalFull_Close(ArcTerminalFull* t);
 bool ArcTerminalFull_IsOpen(const ArcTerminalFull* t);
+bool ArcTerminalFull_IsInShell(const ArcTerminalFull* t);
 
 void ArcTerminalFull_Update(ArcTerminalFull* t, float dt);
 void ArcTerminalFull_ProcessKey(ArcTerminalFull* t, int key);
