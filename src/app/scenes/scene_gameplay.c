@@ -8,9 +8,14 @@
 #include "core/core.h"
 #include "app/input/input.h"
 #include "app/camera/fps_camera.h"
-#include "core/physics/physics.h"
+#include "core/physics/physics.h"  /* PLAYER_HEIGHT, PLAYER_EYE_HEIGHT */
 #include "app/render/atmosphere.h"
 #include "app/render/lighting.h"
+#include "core/world/world_beware.h"
+#include "core/world/voxel_world.h"
+#include "core/world/world_config.h"
+#include "core/gameplay/ship.h"
+#include "app/ui/arc_terminal_screen.h"
 #include <raylib.h>
 #include <raymath.h>
 #if defined(USE_RLGL)
@@ -19,7 +24,7 @@
 #include <stdint.h>
 #include <math.h>
 
-/* Pause: overlay em gameplay (ESC). Debug: F1=grid, F2=wireframe, F3=stats. */
+/* Pause: overlay em gameplay (ESC). Debug: F1=grid, F2=direção (N/S/L/O), F3=stats, F4=wireframe. */
 #include <string.h>
 #include <stdio.h>
 
@@ -62,14 +67,7 @@ static inline bool KeyPressed(ActionId a) {
     return (k1 && IsKeyPressed(k1)) || (k2 && IsKeyPressed(k2));
 }
 
-// Tipos de bloco simples
-typedef enum {
-    BLOCK_AIR = 0,
-    BLOCK_TERRAIN = 1,
-    BLOCK_GRAY = 2,
-    BLOCK_RED = 3
-} SimpleBlockType;
-
+// Mapa debug: usa BlockType de voxel_world.h (BLOCK_AIR, BLOCK_TERRAIN, BLOCK_GRAY, BLOCK_RED, etc.)
 // Mapa simples: array 3D fixo para debugging
 #define MAP_SIZE_X 50
 #define MAP_SIZE_Y 20
@@ -77,6 +75,8 @@ typedef enum {
 #define MAP_OFFSET_X (MAP_SIZE_X / 2)
 #define MAP_OFFSET_Z (MAP_SIZE_Z / 2)
 #define FOG_EXP_TARGET 0.9f  /* em fogEnd, fogT = target; density = -ln(1-target)/fogEnd */
+/* Top-only collider: colisão X/Z contra hull só quando player está abaixo do topo (evita empurrão lateral em cima). */
+#define COLLISION_ABOVE_HULL_EPS  0.05f
 
 static const char* GetAssetPath(const char* rel) {
     if (FileExists(rel)) return rel;
@@ -98,9 +98,10 @@ static int g_pauseSelectionSettings = 0; // SET_FOV..SET_BACK
 static int g_pauseSelectionBinds = 0;    // 0..ACT_COUNT=Back
 static bool g_waitingForKey = false;
 static ActionId g_bindingAction = ACT_MOVE_FORWARD;
-static bool g_dbgShowGrid = true;     // F1
-static bool g_dbgShowWireframe = false; // F2, default OFF
-static bool g_dbgShowStats = false;    // F3
+static bool g_dbgShowGrid = true;       // F1
+static bool g_showDirection = false;    // F2 = bússola (NORTE/SUL/LESTE/OESTE)
+static bool g_dbgShowStats = false;     // F3
+static bool g_dbgShowWireframe = false; // F4, default OFF
 
 typedef struct UiSettingsAnim { float fovVis; float sensVis; } UiSettingsAnim;
 static UiSettingsAnim g_uiAnim;
@@ -110,7 +111,7 @@ static int g_draggingSlider = -1;
 /* Head bob ao andar/correr: fase do seno (decai quando parado) */
 static float g_walkBobPhase = 0.0f;
 
-static SimpleBlockType g_map[MAP_SIZE_X][MAP_SIZE_Y][MAP_SIZE_Z]; // Mapa simples 3D
+static BlockType g_map[MAP_SIZE_X][MAP_SIZE_Y][MAP_SIZE_Z]; // Mapa debug 3D (BlockType de voxel_world.h)
 static FPSCamera g_fpsCamera;
 static PhysicsBody g_playerPhysics;
 static bool g_firstFrame = true; // Flag para travar mouse na primeira frame da gameplay
@@ -125,28 +126,44 @@ static int g_fogLocHorizon = -1, g_fogLocSky = -1, g_fogLocH0 = -1, g_fogLocHRan
 static Shader g_skyShader = {0}; // Sky gradient por raio (sem depth)
 static int g_skyLocBottom = -1, g_skyLocHorizon = -1, g_skyLocTop = -1;
 
-/* Nave 3D: assets/models/ship.glb (carregada para uso futuro; não desenhada no mapa de debug). */
-static Model g_ship = {0};
-static bool g_shipLoaded = false;
+/* Nave 3D: modelo GLB (carregado para uso futuro; placeholder usa Ship_Draw). */
+static Model g_shipModel = {0};
+static bool g_shipModelLoaded = false;
 
 /* CRT overlay: renderiza gameplay num RT e desenha por cima com shader (capinha sem afetar nada). */
 static RenderTexture2D g_crtTarget = {0};
 static Shader g_crtShader = {0};
 
+/* Mundo Beware: streaming por faixa Z e corredor; substitui mapa debug quando ativo. */
+static VoxelWorld* g_voxelWorld = NULL;
+static WorldBeware g_worldBeware;
+static bool g_useStreamingWorld = true;
+/* Nave placeholder: posição física, pivô do streaming, zona segura (deck). */
+static Ship g_ship;
+static bool g_standingOnShip = false;  /* true = player em cima da nave; herda delta. */
+static bool g_isOnLadder = false;       /* true = player na escada; sobe automaticamente, gravidade desativada. */
+
+/* Terminal ARC no pilar da nave: tela renderizada em RT, exibida em face do pilar. */
+static ArcTerminalScreen* g_arcTerminal = NULL;
+static Mesh g_shipPillarScreenMesh = {0};
+static Material g_shipPillarScreenMat = {0};
+static bool g_shipPillarScreenReady = false;
+
 /* Colisão: 3 passes (Y, X, Z) para evitar blocos “puxando” o player.
  * Gravidade só no eixo Y. Colidimos com todo bloco sólido (exceto ar). */
-// Verifica se há um bloco sólido na posição do mapa
+// Verifica se há um bloco sólido na posição do mapa (ou do VoxelWorld quando streaming ativo)
 static bool IsBlockSolid(int32_t x, int32_t y, int32_t z) {
-    // Converte coordenadas globais para índices do array
+    if (g_useStreamingWorld && g_voxelWorld) {
+        Voxel v = VoxelWorld_GetBlock(g_voxelWorld, x, y, z);
+        return v.type != BLOCK_AIR;
+    }
+    // Mapa debug fixo
     int32_t mapX = x + MAP_OFFSET_X;
     int32_t mapY = y;
     int32_t mapZ = z + MAP_OFFSET_Z;
-    
-    // Verifica limites
     if (mapX < 0 || mapX >= MAP_SIZE_X || mapY < 0 || mapY >= MAP_SIZE_Y || mapZ < 0 || mapZ >= MAP_SIZE_Z) {
-        return false; // Fora do mapa = ar
+        return false;
     }
-    
     return g_map[mapX][mapY][mapZ] != BLOCK_AIR;
 }
 
@@ -247,97 +264,271 @@ static bool CheckAABBCollisionPlayerBlock(float px, float py, float pz, float pw
              playerMaxZ < block->minZ || playerMinZ > block->maxZ);
 }
 
-// Resolve colisão AABB: empurra o player para fora do bloco
-static void ResolveAABBCollision(float* px, float* py, float* pz,
-                                 float pw, float ph, float pd,
-                                 const BlockAABB* block) {
-    // Calcula overlap em cada eixo
+/* Colisão player vs nave por eixo (evita escalar parede / empurrão vertical falso). */
+static void ResolvePlayerVsShipX(float* px, float py, float pz, float pw, float ph, float pd,
+                                 const BoundingBox* shipBox) {
+    (void)py; (void)pz; (void)ph; (void)pd;
+    if (!px || !shipBox) return;
     float playerMinX = *px - pw * 0.5f, playerMaxX = *px + pw * 0.5f;
-    float playerMinY = *py, playerMaxY = *py + ph;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+    BoundingBox playerBox = { { playerMinX, playerMinY, playerMinZ }, { playerMaxX, playerMaxY, playerMaxZ } };
+    if (!CheckCollisionBoxes(playerBox, *shipBox)) return;
+    float pushLeft = playerMaxX - shipBox->min.x;
+    float pushRight = shipBox->max.x - playerMinX;
+    if (pushLeft < pushRight) *px -= pushLeft; else *px += pushRight;
+}
+static void ResolvePlayerVsShipZ(float px, float py, float* pz, float pw, float ph, float pd,
+                                 const BoundingBox* shipBox) {
+    (void)px; (void)py; (void)pw; (void)ph;
+    if (!pz || !shipBox) return;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
     float playerMinZ = *pz - pd * 0.5f, playerMaxZ = *pz + pd * 0.5f;
-    
-    float overlapX = fminf(playerMaxX - block->minX, block->maxX - playerMinX);
-    float overlapY = fminf(playerMaxY - block->minY, block->maxY - playerMinY);
-    float overlapZ = fminf(playerMaxZ - block->minZ, block->maxZ - playerMinZ);
-    
-    // Resolve no eixo com menor overlap (menor penetração)
-    if (overlapY <= overlapX && overlapY <= overlapZ) {
-        // Colisão vertical (chão/teto)
-        if (playerMinY < block->minY) {
-            *py = block->minY - ph; // Empurra para cima (colisão com teto)
-        } else {
-            *py = block->maxY; // Empurra para baixo (colisão com chão)
-            g_playerPhysics.onGround = true;
-        }
-    } else if (overlapX < overlapZ) {
-        // Colisão horizontal X
-        if (playerMinX < block->minX) {
-            *px = block->minX - pw * 0.5f; // Empurra para esquerda
-        } else {
-            *px = block->maxX + pw * 0.5f; // Empurra para direita
-        }
+    BoundingBox playerBox = { { playerMinX, playerMinY, playerMinZ }, { playerMaxX, playerMaxY, playerMaxZ } };
+    if (!CheckCollisionBoxes(playerBox, *shipBox)) return;
+    float pushBack = playerMaxZ - shipBox->min.z;
+    float pushFwd = shipBox->max.z - playerMinZ;
+    if (pushBack < pushFwd) *pz -= pushBack; else *pz += pushFwd;
+}
+static void ResolvePlayerVsShipY(float px, float* py, float pz, float pw, float ph, float pd,
+                                 const BoundingBox* shipBox, bool* outStandingOnShip) {
+    (void)px; (void)pz; (void)pw;
+    if (!py || !shipBox || !outStandingOnShip) return;
+    *outStandingOnShip = false;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = *py, playerMaxY = *py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+    BoundingBox playerBox = { { playerMinX, playerMinY, playerMinZ }, { playerMaxX, playerMaxY, playerMaxZ } };
+    if (!CheckCollisionBoxes(playerBox, *shipBox)) return;
+    float pushUp = shipBox->max.y - playerMinY;
+    float pushDown = playerMaxY - shipBox->min.y;
+    if (pushUp < pushDown) {
+        *py += pushUp;
+        *outStandingOnShip = true;
+        g_playerPhysics.onGround = true;
     } else {
-        // Colisão horizontal Z
-        if (playerMinZ < block->minZ) {
-            *pz = block->minZ - pd * 0.5f; // Empurra para trás
-        } else {
-            *pz = block->maxZ + pd * 0.5f; // Empurra para frente
-        }
+        *py -= pushDown;
     }
 }
 
-// Aplica colisão DEPOIS do movimento (separado completamente)
-static void ApplyCollisions(void) {
-    // Calcula bounding box do player
-    float playerMinX = g_playerPhysics.x - g_playerPhysics.width * 0.5f;
-    float playerMaxX = g_playerPhysics.x + g_playerPhysics.width * 0.5f;
-    float playerMinY = g_playerPhysics.y;
-    float playerMaxY = g_playerPhysics.y + g_playerPhysics.height;
-    float playerMinZ = g_playerPhysics.z - g_playerPhysics.depth * 0.5f;
-    float playerMaxZ = g_playerPhysics.z + g_playerPhysics.depth * 0.5f;
+/* Resolve colisão AABB por eixo (só empurra no eixo dado; evita escalar parede). */
+static void ResolveAABBCollisionX(float* px, float py, float pz, float pw, float ph, float pd,
+                                  const BlockAABB* block) {
+    (void)py; (void)pz; (void)ph; (void)pd;
+    float playerMinX = *px - pw * 0.5f, playerMaxX = *px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+    if (playerMaxX < block->minX || playerMinX > block->maxX ||
+        playerMaxY < block->minY || playerMinY > block->maxY ||
+        playerMaxZ < block->minZ || playerMinZ > block->maxZ) return;
+    float pushLeft = playerMaxX - block->minX;
+    float pushRight = block->maxX - playerMinX;
+    if (pushLeft < pushRight) *px -= pushLeft; else *px += pushRight;
+}
+static void ResolveAABBCollisionZ(float px, float py, float* pz, float pw, float ph, float pd,
+                                  const BlockAABB* block) {
+    (void)px; (void)py; (void)pw; (void)ph;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = *pz - pd * 0.5f, playerMaxZ = *pz + pd * 0.5f;
+    if (playerMaxX < block->minX || playerMinX > block->maxX ||
+        playerMaxY < block->minY || playerMinY > block->maxY ||
+        playerMaxZ < block->minZ || playerMinZ > block->maxZ) return;
+    float pushBack = playerMaxZ - block->minZ;
+    float pushFwd = block->maxZ - playerMinZ;
+    if (pushBack < pushFwd) *pz -= pushBack; else *pz += pushFwd;
+}
+static void ResolveAABBCollisionY(float px, float* py, float pz, float pw, float ph, float pd,
+                                  const BlockAABB* block) {
+    (void)px; (void)pz; (void)pw;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = *py, playerMaxY = *py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+    if (playerMaxX < block->minX || playerMinX > block->maxX ||
+        playerMaxY < block->minY || playerMinY > block->maxY ||
+        playerMaxZ < block->minZ || playerMinZ > block->maxZ) return;
+    float pushUp = block->maxY - playerMinY;
+    float pushDown = playerMaxY - block->minY;
+    if (pushUp < pushDown) {
+        *py += pushUp;
+        g_playerPhysics.onGround = true;
+    } else {
+        *py -= pushDown;
+    }
+}
 
-    // Blocos que podem colidir (expande um pouco para garantir detecção)
-    int32_t minX = (int32_t)floorf(playerMinX) - 1;
-    int32_t maxX = (int32_t)ceilf(playerMaxX) + 1;
-    int32_t minY = (int32_t)floorf(playerMinY) - 1;
-    int32_t maxY = (int32_t)ceilf(playerMaxY) + 1;
-    int32_t minZ = (int32_t)floorf(playerMinZ) - 1;
-    int32_t maxZ = (int32_t)ceilf(playerMaxZ) + 1;
-
-    // Reset flags
+/* Resolução por eixo (X, Z, Y): evita escalar parede e grudar no chão. Ordem: resolve X → Z → Y. */
+static void ResolveCollisionsX(void) {
     g_playerPhysics.onGround = false;
-    g_isColliding = false; // Reset flag de colisão
-    
-    // Verifica colisão com todos os blocos próximos
+    g_isColliding = false;
+
+    float px = g_playerPhysics.x, py = g_playerPhysics.y, pz = g_playerPhysics.z;
+    float pw = g_playerPhysics.width, ph = g_playerPhysics.height, pd = g_playerPhysics.depth;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+
+    int32_t minX = (int32_t)floorf(playerMinX) - 1, maxX = (int32_t)ceilf(playerMaxX) + 1;
+    int32_t minY = (int32_t)floorf(playerMinY) - 1, maxY = (int32_t)ceilf(playerMaxY) + 1;
+    int32_t minZ = (int32_t)floorf(playerMinZ) - 1, maxZ = (int32_t)ceilf(playerMaxZ) + 1;
+
     for (int32_t by = minY; by <= maxY; by++) {
         for (int32_t bz = minZ; bz <= maxZ; bz++) {
             for (int32_t bx = minX; bx <= maxX; bx++) {
                 if (!IsBlockSolid(bx, by, bz)) continue;
-                
-                // Cria hitbox do bloco
                 BlockAABB blockAABB = GetBlockAABB((float)bx, (float)by, (float)bz);
-                
-                // Verifica colisão
-                if (CheckAABBCollisionPlayerBlock(g_playerPhysics.x, g_playerPhysics.y, g_playerPhysics.z,
-                                                  g_playerPhysics.width, g_playerPhysics.height, g_playerPhysics.depth,
-                                                  &blockAABB)) {
-                    // Marca que está colidindo (chão ou parede) - SEMPRE que há colisão
+                if (CheckAABBCollisionPlayerBlock(px, py, pz, pw, ph, pd, &blockAABB)) {
                     g_isColliding = true;
-                    
-                    // Resolve colisão (empurra player para fora)
-                    ResolveAABBCollision(&g_playerPhysics.x, &g_playerPhysics.y, &g_playerPhysics.z,
-                                        g_playerPhysics.width, g_playerPhysics.height, g_playerPhysics.depth,
-                                        &blockAABB);
+                    ResolveAABBCollisionX(&g_playerPhysics.x, py, pz, pw, ph, pd, &blockAABB);
+                    px = g_playerPhysics.x;
                 }
             }
         }
     }
-    
-    // Verificação adicional: se está no chão, garante que está colidindo
-    // Isso ajuda a detectar colisão mesmo quando o player está parado no chão
-    if (g_playerPhysics.onGround) {
-        g_isColliding = true;
+
+    /* Casco: top-only — resolve lateral (X) só quando player está abaixo do topo do hull. */
+    if (g_useStreamingWorld && g_voxelWorld) {
+        float hullTop = g_ship.hullBox.max.y;
+        float playerBottom = py;  /* pés do player. */
+        if (playerBottom < hullTop - COLLISION_ABOVE_HULL_EPS) {
+            if (CheckCollisionBoxes((BoundingBox){ { g_playerPhysics.x - pw*0.5f, playerMinY, playerMinZ }, { g_playerPhysics.x + pw*0.5f, playerMaxY, playerMaxZ } }, g_ship.hullBox)) {
+                g_isColliding = true;
+                ResolvePlayerVsShipX(&g_playerPhysics.x, py, pz, pw, ph, pd, &g_ship.hullBox);
+            }
+        }
     }
+}
+
+static void ResolveCollisionsZ(void) {
+    float px = g_playerPhysics.x, py = g_playerPhysics.y, pz = g_playerPhysics.z;
+    float pw = g_playerPhysics.width, ph = g_playerPhysics.height, pd = g_playerPhysics.depth;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+
+    int32_t minX = (int32_t)floorf(playerMinX) - 1, maxX = (int32_t)ceilf(playerMaxX) + 1;
+    int32_t minY = (int32_t)floorf(playerMinY) - 1, maxY = (int32_t)ceilf(playerMaxY) + 1;
+    int32_t minZ = (int32_t)floorf(playerMinZ) - 1, maxZ = (int32_t)ceilf(playerMaxZ) + 1;
+
+    for (int32_t by = minY; by <= maxY; by++) {
+        for (int32_t bz = minZ; bz <= maxZ; bz++) {
+            for (int32_t bx = minX; bx <= maxX; bx++) {
+                if (!IsBlockSolid(bx, by, bz)) continue;
+                BlockAABB blockAABB = GetBlockAABB((float)bx, (float)by, (float)bz);
+                if (CheckAABBCollisionPlayerBlock(px, py, pz, pw, ph, pd, &blockAABB)) {
+                    g_isColliding = true;
+                    ResolveAABBCollisionZ(px, py, &g_playerPhysics.z, pw, ph, pd, &blockAABB);
+                    pz = g_playerPhysics.z;
+                }
+            }
+        }
+    }
+
+    /* Casco: top-only — resolve lateral (Z) só quando player está abaixo do topo do hull. */
+    if (g_useStreamingWorld && g_voxelWorld) {
+        float hullTop = g_ship.hullBox.max.y;
+        float playerBottom = py;
+        if (playerBottom < hullTop - COLLISION_ABOVE_HULL_EPS) {
+            if (CheckCollisionBoxes((BoundingBox){ { playerMinX, playerMinY, g_playerPhysics.z - pd*0.5f }, { playerMaxX, playerMaxY, g_playerPhysics.z + pd*0.5f } }, g_ship.hullBox)) {
+                g_isColliding = true;
+                ResolvePlayerVsShipZ(px, py, &g_playerPhysics.z, pw, ph, pd, &g_ship.hullBox);
+            }
+        }
+    }
+}
+
+static void ResolveCollisionsY(void) {
+    g_standingOnShip = false;
+    g_isOnLadder = false;
+
+    float px = g_playerPhysics.x, py = g_playerPhysics.y, pz = g_playerPhysics.z;
+    float pw = g_playerPhysics.width, ph = g_playerPhysics.height, pd = g_playerPhysics.depth;
+    float playerMinX = px - pw * 0.5f, playerMaxX = px + pw * 0.5f;
+    float playerMinY = py, playerMaxY = py + ph;
+    float playerMinZ = pz - pd * 0.5f, playerMaxZ = pz + pd * 0.5f;
+
+    int32_t minX = (int32_t)floorf(playerMinX) - 1, maxX = (int32_t)ceilf(playerMaxX) + 1;
+    int32_t minY = (int32_t)floorf(playerMinY) - 1, maxY = (int32_t)ceilf(playerMaxY) + 1;
+    int32_t minZ = (int32_t)floorf(playerMinZ) - 1, maxZ = (int32_t)ceilf(playerMaxZ) + 1;
+
+    for (int32_t by = minY; by <= maxY; by++) {
+        for (int32_t bz = minZ; bz <= maxZ; bz++) {
+            for (int32_t bx = minX; bx <= maxX; bx++) {
+                if (!IsBlockSolid(bx, by, bz)) continue;
+                BlockAABB blockAABB = GetBlockAABB((float)bx, (float)by, (float)bz);
+                if (CheckAABBCollisionPlayerBlock(px, py, pz, pw, ph, pd, &blockAABB)) {
+                    g_isColliding = true;
+                    ResolveAABBCollisionY(px, &g_playerPhysics.y, pz, pw, ph, pd, &blockAABB);
+                    py = g_playerPhysics.y;
+                }
+            }
+        }
+    }
+
+    if (g_useStreamingWorld && g_voxelWorld) {
+        float pyNow = g_playerPhysics.y;
+        BoundingBox playerBox = {
+            { px - pw*0.5f, pyNow, pz - pd*0.5f },
+            { px + pw*0.5f, pyNow + ph, pz + pd*0.5f }
+        };
+        if (CheckCollisionBoxes(playerBox, g_ship.hullBox)) {
+            g_isColliding = true;
+            ResolvePlayerVsShipY(px, &g_playerPhysics.y, pz, pw, ph, pd, &g_ship.hullBox, &g_standingOnShip);
+        }
+        playerBox.min.x = g_playerPhysics.x - pw * 0.5f;
+        playerBox.max.x = g_playerPhysics.x + pw * 0.5f;
+        playerBox.min.y = g_playerPhysics.y;
+        playerBox.max.y = g_playerPhysics.y + ph;
+        playerBox.min.z = g_playerPhysics.z - pd * 0.5f;
+        playerBox.max.z = g_playerPhysics.z + pd * 0.5f;
+        if (CheckCollisionBoxes(playerBox, g_ship.deckBox)) {
+            g_standingOnShip = true;
+            g_playerPhysics.onGround = true;
+        }
+        if (CheckCollisionBoxes(playerBox, g_ship.ladderBox) && g_playerPhysics.vy >= 0.0f) {
+            g_isOnLadder = true;
+        }
+        if (CheckCollisionBoxes(playerBox, g_ship.deckBox)) {
+            g_isOnLadder = false;
+            g_standingOnShip = true;
+            g_playerPhysics.vy = 0.0f;
+        }
+        /* Standing só conta se pé perto do topo do hull e XZ dentro do hull (evita standing=1 meio fora). */
+        if (g_standingOnShip) {
+            float hullTop = g_ship.hullBox.max.y;
+            float footY = g_playerPhysics.y;
+            int inHullXZ = (g_playerPhysics.x >= g_ship.hullBox.min.x && g_playerPhysics.x <= g_ship.hullBox.max.x &&
+                            g_playerPhysics.z >= g_ship.hullBox.min.z && g_playerPhysics.z <= g_ship.hullBox.max.z);
+            if (fabsf(footY - hullTop) > COLLISION_ABOVE_HULL_EPS || !inHullXZ)
+                g_standingOnShip = false;
+        }
+    }
+
+    if (g_playerPhysics.onGround) g_isColliding = true;
+}
+
+/* ——— Bússola (direção do olhar no plano XZ). Mundo: +Z=Norte, -Z=Sul, +X=Leste, -X=Oeste. ——— */
+#ifndef PI
+#define PI 3.14159265358979323846f
+#endif
+static const char* GetCardinal(float deg) {
+    if (deg >= 315.0f || deg < 45.0f)  return "NORTE";
+    if (deg < 135.0f)                   return "LESTE";
+    if (deg < 225.0f)                   return "SUL";
+    return "OESTE";
+}
+static void Debug_DrawCompass(const FPSCamera* cam) {
+    if (!cam) return;
+    float forwardX, forwardZ;
+    FPSCamera_GetForwardFlat(cam, &forwardX, &forwardZ);
+    float lenSq = forwardX * forwardX + forwardZ * forwardZ;
+    if (lenSq < 0.000001f) return;
+    float angleRad = atan2f(forwardX, forwardZ);
+    float angleDeg = angleRad * (180.0f / PI);
+    if (angleDeg < 0.0f) angleDeg += 360.0f;
+    const char* dir = GetCardinal(angleDeg);
+    DrawText(TextFormat("DIR: %s (%.1f°)", dir, angleDeg), 20, 60, 20, YELLOW);
 }
 
 // Gera um mapa simples de debug - SEM chunks, SEM sistema procedural
@@ -520,9 +711,9 @@ void Scene_Gameplay_Shutdown(void) {
         g_skyShader.id = 0;
         g_skyLocBottom = g_skyLocHorizon = g_skyLocTop = -1;
     }
-    if (g_shipLoaded) {
-        UnloadModel(g_ship);
-        g_shipLoaded = false;
+    if (g_shipModelLoaded) {
+        UnloadModel(g_shipModel);
+        g_shipModelLoaded = false;
     }
     if (g_crtTarget.id != 0) {
         UnloadRenderTexture(g_crtTarget);
@@ -532,7 +723,20 @@ void Scene_Gameplay_Shutdown(void) {
         UnloadShader(g_crtShader);
         g_crtShader = (Shader){0};
     }
-    
+    if (g_voxelWorld) {
+        VoxelWorld_Destroy(g_voxelWorld);
+        g_voxelWorld = NULL;
+    }
+    if (g_arcTerminal) {
+        ArcTerminalScreen_Destroy(g_arcTerminal);
+        g_arcTerminal = NULL;
+    }
+    if (g_shipPillarScreenReady) {
+        UnloadMesh(g_shipPillarScreenMesh);
+        UnloadMaterial(g_shipPillarScreenMat);
+        g_shipPillarScreenReady = false;
+    }
+
     // Reseta flags
     g_initialized = false;
     g_firstFrame = true;
@@ -544,17 +748,27 @@ void Scene_Gameplay_Init(void) {
         Scene_Gameplay_Shutdown();
     }
     
-    // Gera mapa simples de debug (SEM chunks, SEM sistema procedural)
-    GenerateDebugMap();
+    if (!g_useStreamingWorld) {
+        GenerateDebugMap();
+    } else {
+        g_voxelWorld = VoxelWorld_Create("beware-the-dust");
+        WorldBeware_Init(&g_worldBeware, "beware-the-dust");
+        WorldBeware_AttachVoxelWorld(&g_worldBeware, g_voxelWorld);
+        Ship_Init(&g_ship);
+    }
     
-    // Spawn no centro do mapa (origem) - coordenadas 0,0,0
-    // Spawn em Y=1.0 (1 bloco acima do chão Y=0)
+    /* Spawn: centro do mapa ou em cima do deck da nave (streaming). */
     const float spawnX = 0.0f;
     const float spawnY = 1.0f;
     const float spawnZ = 0.0f;
     PhysicsBody_Init(&g_playerPhysics, spawnX, spawnY, spawnZ);
-    
-    // Força o player a estar no chão inicialmente
+    if (g_useStreamingWorld && g_voxelWorld) {
+        /* Jogador spawna em cima da nave, na mesma posição que o pouso começa. */
+        g_playerPhysics.x = g_ship.position.x;
+        g_playerPhysics.z = g_ship.position.z;
+        g_playerPhysics.y = g_ship.hullBox.max.y + COLLISION_ABOVE_HULL_EPS;
+        g_playerPhysics.vx = g_playerPhysics.vy = g_playerPhysics.vz = 0.0f;
+    }
     g_playerPhysics.onGround = true;
     g_playerPhysics.vy = 0.0f;
     
@@ -589,7 +803,7 @@ void Scene_Gameplay_Init(void) {
     }
     
     // Inicializa câmera FPS estilo Minecraft
-    FPSCamera_Init(&g_fpsCamera, g_playerPhysics.x, g_playerPhysics.y + 1.6f, g_playerPhysics.z);
+    FPSCamera_Init(&g_fpsCamera, g_playerPhysics.x, g_playerPhysics.y + PLAYER_EYE_HEIGHT, g_playerPhysics.z);
     
     // Inicializa sistema de atmosfera (fog + sky gradient)
     Atmosphere_Init(&g_atmosphere);
@@ -605,18 +819,30 @@ void Scene_Gameplay_Init(void) {
     // Nave 3D para o lobby (só a nave renderiza, jogador anda dentro): assets/models/ship.glb
     const char* shipPath = GetAssetPath("assets/models/ship.glb");
     if (FileExists(shipPath)) {
-        g_ship = LoadModel(shipPath);
-        g_shipLoaded = true;
+        g_shipModel = LoadModel(shipPath);
+        g_shipModelLoaded = true;
         /* GLTF sem textura → material branco padrão; forçar cinza para não estourar */
-        for (int i = 0; i < g_ship.materialCount; i++) {
-            g_ship.materials[i].maps[MATERIAL_MAP_DIFFUSE].color = (Color){ 180, 180, 180, 255 };
+        for (int i = 0; i < g_shipModel.materialCount; i++) {
+            g_shipModel.materials[i].maps[MATERIAL_MAP_DIFFUSE].color = (Color){ 180, 180, 180, 255 };
         }
-        // Se tiver textura depois: g_ship.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = LoadTexture("assets/textures/ship_diffuse.png");
+        // Se tiver textura depois: g_shipModel.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = LoadTexture("assets/textures/ship_diffuse.png");
         TraceLog(LOG_INFO, "Ship model loaded: %s", shipPath);
     } else {
         TraceLog(LOG_WARNING, "Ship model not found: %s (lobby will show no ship)", shipPath);
     }
-    
+
+    /* Terminal ARC no pilar da nave: tela em face do pilar (só com streaming world). */
+    if (g_useStreamingWorld) {
+        g_arcTerminal = ArcTerminalScreen_Create(256, 192);
+        if (g_arcTerminal && ArcTerminalScreen_IsValid(g_arcTerminal)) {
+            /* Mesh: plano vertical (face +Z), tamanho ~0.28 x 0.36 m — visível para personagem em pé. */
+            g_shipPillarScreenMesh = GenMeshPlane(0.28f, 0.36f, 1, 1);
+            g_shipPillarScreenMat = LoadMaterialDefault();
+            g_shipPillarScreenReady = true;
+            TraceLog(LOG_INFO, "ARC terminal screen on ship pillar initialized.");
+        }
+    }
+
     // Inicializa sistema de iluminação direcional fake
     Lighting_Init(&g_lighting);
     // Configura luz direcional (sol vindo do alto e ligeiramente de frente)
@@ -675,8 +901,9 @@ void Scene_Gameplay_Update(float dt) {
     if (!g_initialized) return;
 
     if (IsKeyPressed(KEY_F1)) g_dbgShowGrid = !g_dbgShowGrid;
-    if (IsKeyPressed(KEY_F2)) g_dbgShowWireframe = !g_dbgShowWireframe;
+    if (IsKeyPressed(KEY_F2)) g_showDirection = !g_showDirection;
     if (IsKeyPressed(KEY_F3)) g_dbgShowStats = !g_dbgShowStats;
+    if (IsKeyPressed(KEY_F4)) g_dbgShowWireframe = !g_dbgShowWireframe;
 
     // Trava mouse na primeira frame da gameplay
     if (g_firstFrame) {
@@ -847,11 +1074,46 @@ void Scene_Gameplay_Update(float dt) {
         SetMousePosition(centerX, centerY);
     }
     
-    // Toggle "No clipping" com N
     if (IsKeyPressed(KEY_N)) {
         g_noClip = !g_noClip;
     }
     
+    /* Nave atualiza primeiro (clamp ao chão está dentro de Ship_Update). */
+    if (g_useStreamingWorld && g_voxelWorld) {
+        Ship_Update(&g_ship, dt);
+        Ship_UpdateCollision(&g_ship);
+        /* Delta aplicado aqui (antes do movimento) usando standingOnShip do frame anterior.
+         * Herdar deltaY evita kick/jitter quando a nave desce (player acompanha em Y).
+         * Quando speed > 0: se o player estiver na borda, o delta pode tirá-lo da projeção XZ,
+         * standing vira false e ele cai — comportamento correto de plataforma móvel, não bug. */
+        if (g_standingOnShip) {
+            g_playerPhysics.x += g_ship.deltaX;
+            g_playerPhysics.y += g_ship.deltaY;
+            g_playerPhysics.z += g_ship.deltaZ;
+            if (g_ship.deltaY != 0.0f) g_playerPhysics.vy = 0.0f;
+        }
+    }
+    
+    /* F5: inicia Drop Sequence (descida curva); player livre antes/durante/depois. */
+    if (g_useStreamingWorld && g_voxelWorld && IsKeyPressed(KEY_F5) && g_ship.state == SHIP_IDLE_HOVER) {
+        g_ship.state = SHIP_DESCENDING;
+        g_ship.descendTimer = 0.0f;
+        /* Destino: pairar perto do chão no centro do corredor (landZ fixo = 0). */
+        float groundY = 0.0f;
+        float finalY = groundY + g_ship.targetHeight;
+        float landX = 0.0f;
+        float landZ = 0.0f;
+        g_ship.descendEndPos = (Vector3){ landX, finalY, landZ };
+        /* Início do arco: alto e atrás (-30 em Z); nave já está aqui ao iniciar gameplay. */
+        g_ship.descendStartPos = (Vector3){ landX, g_ship.startHeight, landZ - 30.0f };
+        g_ship.position = g_ship.descendStartPos;
+    }
+    /* F6: inicia movimento da nave em direção ao norte (+Z); só quando já pousou. */
+    if (g_useStreamingWorld && g_voxelWorld && IsKeyPressed(KEY_F6) && g_ship.state == SHIP_HOVER_READY) {
+        g_ship.speed = 1.5f;
+        g_ship.moveDirX = 0.0f;
+        g_ship.moveDirZ = 1.0f;
+    }
     if (g_fpsCamera.locked) {
         float moveSpeed = 5.0f * (KeyDown(ACT_SPRINT) ? 1.6f : 1.0f);
 
@@ -904,10 +1166,12 @@ void Scene_Gameplay_Update(float dt) {
             FPSCamera_GetRightFlat(&g_fpsCamera, &rightX, &rightZ);
             float moveX = (forwardX * forward + rightX * right) * moveSpeed * dt;
             float moveZ = (forwardZ * forward + rightZ * right) * moveSpeed * dt;
-            
-            // Aplica movimento XZ diretamente (SEM física, SEM atrito)
+            if (g_isOnLadder) { moveX = 0.0f; moveZ = 0.0f; } /* escada: só sobe, centraliza no X depois. */
+            // Movimento e colisão por eixo (X → Z → Y) para não escalar parede nem grudar no chão
             g_playerPhysics.x += moveX;
+            ResolveCollisionsX();
             g_playerPhysics.z += moveZ;
+            ResolveCollisionsZ();
             
             // Verifica ground ANTES do pulo: checa se há bloco sólido abaixo dos pés
             // Esta verificação é feita ANTES do movimento Y para garantir que o pulo funcione
@@ -942,24 +1206,29 @@ void Scene_Gameplay_Update(float dt) {
                 isOnGround = false; // Não está mais no chão após pular
                 g_playerPhysics.onGround = false; // Reseta flag também
             }
-            
-            // Aplica gravidade quando não está no chão
-            if (!isOnGround) {
-                g_playerPhysics.vy += GRAVITY * dt;
-                // Limita velocidade de queda
-                if (g_playerPhysics.vy < MAX_FALL_SPEED) {
-                    g_playerPhysics.vy = MAX_FALL_SPEED;
-                }
+
+            /* Escada: sobe automaticamente, gravidade desativada, centraliza no X. */
+            if (g_isOnLadder) {
+                g_playerPhysics.vx = 0.0f;
+                g_playerPhysics.vz = 0.0f;
+                g_playerPhysics.vy = 2.0f; /* velocidade de subida */
+                float ladderCenterX = (g_ship.ladderBox.min.x + g_ship.ladderBox.max.x) * 0.5f;
+                g_playerPhysics.x = LerpFloat(g_playerPhysics.x, ladderCenterX, 6.0f * dt);
             } else {
-                // Se está no chão, zera velocidade Y (evita "flutuação")
-                g_playerPhysics.vy = 0.0f;
+                /* Gravidade quando não está no chão. */
+                if (!isOnGround) {
+                    g_playerPhysics.vy += GRAVITY * dt;
+                    if (g_playerPhysics.vy < MAX_FALL_SPEED) {
+                        g_playerPhysics.vy = MAX_FALL_SPEED;
+                    }
+                } else {
+                    g_playerPhysics.vy = 0.0f;
+                }
             }
             
-            // Atualiza posição Y com velocidade
+            // Atualiza posição Y com velocidade e resolve colisão só no eixo Y
             g_playerPhysics.y += g_playerPhysics.vy * dt;
-            
-            // APLICA COLISÃO DEPOIS DO MOVIMENTO (separado completamente)
-            ApplyCollisions();
+            ResolveCollisionsY();
             
             // Após colisão, se estiver no chão, garante que velocidade Y seja zero
             if (g_playerPhysics.onGround) {
@@ -972,28 +1241,55 @@ void Scene_Gameplay_Update(float dt) {
         }
     }
     
+    if (g_arcTerminal) {
+        ArcTerminalScreen_Update(g_arcTerminal, dt);
+    }
+    if (g_useStreamingWorld && g_voxelWorld) {
+        WorldBeware_Update(&g_worldBeware, g_ship.position.x, g_ship.position.z, 0.0f, g_playerPhysics.x, g_playerPhysics.z);
+        /* Zona segura (deck): jogador dentro = isSafe (oxigênio, etc.). */
+        {
+            Vector3 pMin = {
+                g_playerPhysics.x - g_playerPhysics.width * 0.5f,
+                g_playerPhysics.y,
+                g_playerPhysics.z - g_playerPhysics.depth * 0.5f
+            };
+            Vector3 pMax = {
+                g_playerPhysics.x + g_playerPhysics.width * 0.5f,
+                g_playerPhysics.y + g_playerPhysics.height,
+                g_playerPhysics.z + g_playerPhysics.depth * 0.5f
+            };
+            BoundingBox playerBox = (BoundingBox){ pMin, pMax };
+            g_playerPhysics.isSafe = CheckCollisionBoxes(playerBox, g_ship.deckBox);
+        }
+    } else {
+        g_playerPhysics.isSafe = false;
+    }
+    
     // Atualiza posição da câmera para seguir o player
     g_fpsCamera.position.x = g_playerPhysics.x;
-    g_fpsCamera.position.y = g_playerPhysics.y + 1.6f; // Altura dos olhos
+    g_fpsCamera.position.y = g_playerPhysics.y + PLAYER_EYE_HEIGHT;  /* y = pé; câmera nos olhos. */
     g_fpsCamera.position.z = g_playerPhysics.z;
 
-    /* Head bob ao andar/correr (shake suave; decai quando parado) */
+    /* Head bob só enquanto segura teclas de movimento; desliga ao parar. Desativado durante pouso. */
     {
+        bool allowBob = (g_ship.state == SHIP_HOVER_READY);
         int moving = 0;
-        if (!g_noClip && (KeyDown(ACT_MOVE_FORWARD) || KeyDown(ACT_MOVE_BACK) || KeyDown(ACT_MOVE_LEFT) || KeyDown(ACT_MOVE_RIGHT)))
+        if (allowBob && !g_noClip && (KeyDown(ACT_MOVE_FORWARD) || KeyDown(ACT_MOVE_BACK) || KeyDown(ACT_MOVE_LEFT) || KeyDown(ACT_MOVE_RIGHT)))
             moving = 1;
-        float bobSpeed = 8.0f * (KeyDown(ACT_SPRINT) ? 1.4f : 1.0f);
-        if (moving)
+        if (!allowBob || !moving) {
+            g_fpsCamera.bobOffset.x = g_fpsCamera.bobOffset.y = g_fpsCamera.bobOffset.z = 0.0f;
+            g_walkBobPhase = 0.0f;
+        } else {
+            float bobSpeed = 8.0f * (KeyDown(ACT_SPRINT) ? 1.4f : 1.0f);
             g_walkBobPhase += dt * bobSpeed;
-        else
-            g_walkBobPhase *= 0.92f;
-        float bobY = 0.048f * sinf(g_walkBobPhase);
-        float sway = 0.022f * sinf(g_walkBobPhase * 2.0f);
-        float rx, rz;
-        FPSCamera_GetRightFlat(&g_fpsCamera, &rx, &rz);
-        g_fpsCamera.bobOffset.x = rx * sway;
-        g_fpsCamera.bobOffset.y = bobY;
-        g_fpsCamera.bobOffset.z = rz * sway;
+            float bobY = 0.048f * sinf(g_walkBobPhase);
+            float sway = 0.022f * sinf(g_walkBobPhase * 2.0f);
+            float rx, rz;
+            FPSCamera_GetRightFlat(&g_fpsCamera, &rx, &rz);
+            g_fpsCamera.bobOffset.x = rx * sway;
+            g_fpsCamera.bobOffset.y = bobY;
+            g_fpsCamera.bobOffset.z = rz * sway;
+        }
     }
 
     // Input/rede: movimento é via WASD + PhysicsBody. InputCmd reservado para rede.
@@ -1147,11 +1443,26 @@ void Scene_Gameplay_Draw(void) {
             for (int32_t y = 0; y < MAP_SIZE_Y; y++) {
                 if (!IsBlockSolid(x, y, z)) continue;
                 Color blockColor;
-                switch (g_map[x + MAP_OFFSET_X][y][z + MAP_OFFSET_Z]) {
-                    case BLOCK_TERRAIN: blockColor = (Color){101, 67, 33, 255}; break;
-                    case BLOCK_GRAY:   blockColor = (Color){128, 128, 128, 255}; break;
-                    case BLOCK_RED:    blockColor = (Color){255, 50, 50, 255}; break;
-                    default: continue;
+                if (g_useStreamingWorld && g_voxelWorld) {
+                    Voxel v = VoxelWorld_GetBlock(g_voxelWorld, x, y, z);
+                    switch (v.type) {
+                        case BLOCK_TERRAIN: blockColor = (Color){101, 67, 33, 255}; break;
+                        case BLOCK_BLACK:   blockColor = (Color){20, 20, 20, 255}; break;
+                        case BLOCK_GRAY:   blockColor = (Color){128, 128, 128, 255}; break;
+                        case BLOCK_RED:    blockColor = (Color){255, 50, 50, 255}; break;
+                        case BLOCK_ORANGE: blockColor = (Color){200, 100, 50, 255}; break;
+                        case BLOCK_GREEN:  blockColor = (Color){50, 180, 80, 255}; break;
+                        case BLOCK_PURPLE:
+                        case BLOCK_VIOLET: blockColor = (Color){120, 80, 180, 255}; break;
+                        default: blockColor = (Color){128, 128, 128, 255}; break;
+                    }
+                } else {
+                    switch (g_map[x + MAP_OFFSET_X][y][z + MAP_OFFSET_Z]) {
+                        case BLOCK_TERRAIN: blockColor = (Color){101, 67, 33, 255}; break;
+                        case BLOCK_GRAY:   blockColor = (Color){128, 128, 128, 255}; break;
+                        case BLOCK_RED:    blockColor = (Color){255, 50, 50, 255}; break;
+                        default: continue;
+                    }
                 }
                 if (!IsBlockSolid(x - 1, y, z)) DrawBlockFace_Solid((float)x, (float)y, (float)z, 0, blockColor, &facesInBatch);
                 if (!IsBlockSolid(x + 1, y, z)) DrawBlockFace_Solid((float)x, (float)y, (float)z, 1, blockColor, &facesInBatch);
@@ -1163,6 +1474,38 @@ void Scene_Gameplay_Draw(void) {
         }
     }
 
+    if (g_useStreamingWorld && g_voxelWorld) {
+        Ship_Draw(&g_ship);
+
+        /* Pilar com tela ARC na nave: pilar cinza + quad com terminal na face frontal (+Z). */
+        if (g_arcTerminal && g_shipPillarScreenReady) {
+            float sx = g_ship.position.x;
+            float sz = g_ship.position.z;
+            float deckTop = g_ship.hullBox.max.y;
+            float pillarHalfX = 0.15f, pillarHalfY = 0.5f, pillarHalfZ = 0.15f;
+            float pillarCenterY = deckTop + pillarHalfY;  /* Base do pilar no deck, 1m de altura. */
+            float pillarCenterZ = sz + 1.2f;
+
+            /* Pilar: cubo cinza escuro em cima do deck. */
+            DrawCube((Vector3){sx, pillarCenterY, pillarCenterZ},
+                     pillarHalfX * 2.0f, pillarHalfY * 2.0f, pillarHalfZ * 2.0f,
+                     (Color){60, 60, 65, 255});
+
+            /* Tela: renderiza terminal no RT e desenha em quad vertical na face +Z do pilar. */
+            ArcTerminalScreen_RenderToTexture(g_arcTerminal);
+            Texture2D tex = ArcTerminalScreen_GetTexture(g_arcTerminal);
+            if (tex.id != 0) {
+                SetMaterialTexture(&g_shipPillarScreenMat, MATERIAL_MAP_DIFFUSE, tex);
+                float screenZ = pillarCenterZ + pillarHalfZ + 0.005f;
+                float screenCenterY = deckTop + 0.5f;  /* Centro da tela à altura do peito (personagem em pé). */
+                Matrix rotX = MatrixRotateX(-90.0f * DEG2RAD);
+                Matrix trans = MatrixTranslate(sx, screenCenterY, screenZ);
+                Matrix transform = MatrixMultiply(rotX, trans);
+                DrawMesh(g_shipPillarScreenMesh, g_shipPillarScreenMat, transform);
+            }
+        }
+    }
+
     if (g_atmosphere.fog.enabled && g_fogShader.id != 0) {
         EndShaderMode();
     }
@@ -1170,7 +1513,7 @@ void Scene_Gameplay_Draw(void) {
     rlDrawRenderBatchActive();  // flush sólidos/fog antes do passe de wireframe
 #endif
 
-    // ——— Passe 2: só linhas (wireframe), shader padrão, fora do fog. F2 = g_dbgShowWireframe. ———
+    // ——— Passe 2: só linhas (wireframe), shader padrão, fora do fog. F4 = g_dbgShowWireframe. ———
     if (g_dbgShowWireframe) {
     int linesInBatch = 0;
     for (int32_t x = playerBlockX - renderRadius; x <= playerBlockX + renderRadius; x++) {
@@ -1188,6 +1531,19 @@ void Scene_Gameplay_Draw(void) {
                 if (!IsBlockSolid(x, y, z + 1)) DrawBlockFace_Wire((float)x, (float)y, (float)z, 5, &linesInBatch);
             }
         }
+    }
+    /* Nave: wire + 8 vértices do AABB (só debug visual). */
+    {
+        const BoundingBox* bb = &g_ship.hullBox;
+        DrawBoundingBox(*bb, LIME);
+        const float r = 0.05f;
+        Vector3 c[] = {
+            { bb->min.x, bb->min.y, bb->min.z }, { bb->max.x, bb->min.y, bb->min.z },
+            { bb->min.x, bb->max.y, bb->min.z }, { bb->max.x, bb->max.y, bb->min.z },
+            { bb->min.x, bb->min.y, bb->max.z }, { bb->max.x, bb->min.y, bb->max.z },
+            { bb->min.x, bb->max.y, bb->max.z }, { bb->max.x, bb->max.y, bb->max.z }
+        };
+        for (int i = 0; i < 8; i++) DrawSphere(c[i], r, LIME);
     }
 #if defined(USE_RLGL)
         rlDrawRenderBatchActive();
@@ -1308,14 +1664,51 @@ void Scene_Gameplay_Draw(void) {
             snprintf(info, sizeof(info), "Collision: %s", isColliding ? "YES" : "NO");
             DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
             startY += lineHeight;
-            int32_t blockCount = 0;
-            for (int32_t x = 0; x < MAP_SIZE_X; x++)
-                for (int32_t y = 0; y < MAP_SIZE_Y; y++)
-                    for (int32_t z = 0; z < MAP_SIZE_Z; z++)
-                        if (g_map[x][y][z] != BLOCK_AIR) blockCount++;
-            snprintf(info, sizeof(info), "Map Blocks: %d", blockCount);
+            snprintf(info, sizeof(info), "Standing: %d  OnGround: %d", g_standingOnShip ? 1 : 0, g_playerPhysics.onGround ? 1 : 0);
+            DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+            startY += lineHeight;
+            if (g_useStreamingWorld && g_voxelWorld) {
+                int32_t minZ = 0, maxZ = 0;
+                WorldBeware_GetStreamRange(&g_worldBeware, &minZ, &maxZ);
+                snprintf(info, sizeof(info), "STREAM Z: %d..%d", minZ, maxZ);
+                DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+                startY += lineHeight;
+                snprintf(info, sizeof(info), "Safe (deck): %s", g_playerPhysics.isSafe ? "YES" : "NO");
+                DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+                startY += lineHeight;
+                const char* shipStateStr = "?";
+                if (g_ship.state == SHIP_IDLE_HOVER) shipStateStr = "IDLE_HOVER";
+                else if (g_ship.state == SHIP_DESCENDING) shipStateStr = "DESCENDING";
+                else if (g_ship.state == SHIP_HOVER_READY) shipStateStr = "HOVER_READY";
+                snprintf(info, sizeof(info), "ShipState: %s  ShipY: %.1f  ShipSpeed: %.1f", shipStateStr, g_ship.position.y, g_ship.speed);
+                DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+                startY += lineHeight;
+                snprintf(info, sizeof(info), "ShipY: %.1f  HullMinY: %.1f  HullMaxY: %.1f", g_ship.position.y, g_ship.hullBox.min.y, g_ship.hullBox.max.y);
+                DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+                startY += lineHeight;
+                float playerFootY = g_playerPhysics.y;
+                float playerCenterY = g_playerPhysics.y + g_playerPhysics.height * 0.5f;
+                float playerHeadY = g_playerPhysics.y + g_playerPhysics.height;
+                snprintf(info, sizeof(info), "PlayerFootY: %.1f  PlayerCenterY: %.1f  PlayerHeadY: %.1f", playerFootY, playerCenterY, playerHeadY);
+                DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
+                startY += lineHeight;
+            }
+            if (g_useStreamingWorld && g_voxelWorld) {
+                int32_t loadedChunks = 0;
+                VoxelWorld_GetStats(g_voxelWorld, &loadedChunks, NULL);
+                snprintf(info, sizeof(info), "Chunks: %d", loadedChunks);
+            } else {
+                int32_t blockCount = 0;
+                for (int32_t x = 0; x < MAP_SIZE_X; x++)
+                    for (int32_t y = 0; y < MAP_SIZE_Y; y++)
+                        for (int32_t z = 0; z < MAP_SIZE_Z; z++)
+                            if (g_map[x][y][z] != BLOCK_AIR) blockCount++;
+                snprintf(info, sizeof(info), "Map Blocks: %d", blockCount);
+            }
             DrawTextEx(g_consolaFont, info, (Vector2){10.0f, startY}, fontSize, 0.0f, textColor);
         }
+        if (g_showDirection)
+            Debug_DrawCompass(&g_fpsCamera);
         DrawCrosshair();
         DrawText("ESC - Pause", 20, GetScreenHeight() - 30, 16, Fade(RAYWHITE, 0.5f));
     }

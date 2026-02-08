@@ -44,6 +44,12 @@ CORE_SRC = $(SRC_DIR)/core/core.c \
            $(SRC_DIR)/core/world/map.c \
            $(SRC_DIR)/core/world/procgen.c \
            $(SRC_DIR)/core/world/world_seed.c \
+           $(SRC_DIR)/core/world/segment_manager.c \
+           $(SRC_DIR)/core/world/threat_system.c \
+           $(SRC_DIR)/core/world/event_system.c \
+           $(SRC_DIR)/core/world/streaming_controller.c \
+           $(SRC_DIR)/core/world/structure_spawner.c \
+           $(SRC_DIR)/core/world/world_beware.c \
            $(SRC_DIR)/core/world/chunk.c \
            $(SRC_DIR)/core/world/voxel_world.c \
            $(SRC_DIR)/core/world/route.c \
@@ -52,6 +58,7 @@ CORE_SRC = $(SRC_DIR)/core/core.c \
            $(SRC_DIR)/core/world/structures.c \
            $(SRC_DIR)/core/world/world_generator.c \
            $(SRC_DIR)/core/gameplay/player.c \
+           $(SRC_DIR)/core/gameplay/ship.c \
            $(SRC_DIR)/core/physics/physics.c \
            $(SRC_DIR)/core/net/net.c
 
@@ -67,7 +74,8 @@ APP_SRC_C = $(SRC_DIR)/app/app.c \
             $(SRC_DIR)/app/render/frustum.c \
             $(SRC_DIR)/app/render/atmosphere.c \
             $(SRC_DIR)/app/render/lighting.c \
-            $(SRC_DIR)/app/ui/scifi_terminal.c
+            $(SRC_DIR)/app/ui/scifi_terminal.c \
+            $(SRC_DIR)/app/ui/arc_terminal_screen.c
 
 # Arquivos fonte App (C++)
 APP_SRC_CPP = $(SRC_DIR)/app/camera/fps_camera.cpp
