@@ -57,7 +57,7 @@ ArcTerminalScreen* ArcTerminalScreen_Create(int width, int height) {
     const char* fontPath = GetAssetPath_Arc("assets/fonts/CONSOLA.TTF");
     if (!FileExists(fontPath))
         fontPath = GetAssetPath_Arc("assets/fonts/CONSOLA.ttf");
-    arc->font = LoadFontEx(fontPath, 32, 0, 400);
+    arc->font = LoadFontEx(fontPath, 22, 0, 96);
     arc->fontLoaded = (arc->font.texture.id != 0);
     if (arc->fontLoaded)
         SetTextureFilter(arc->font.texture, TEXTURE_FILTER_BILINEAR);
@@ -112,52 +112,48 @@ void ArcTerminalScreen_RenderToTexture(ArcTerminalScreen* arc) {
     }
 
     /* Borda verde */
-    DrawRectangleLinesEx((Rectangle){8, 8, w - 16, h - 16}, 2, ARC_COLOR_GREEN);
+    DrawRectangleLinesEx((Rectangle){4, 4, w - 8, h - 8}, 1, ARC_COLOR_GREEN);
 
-    /* Cabeçalho */
-    const char* header = "ARC_SHELL | [NAVIGATION MODE]";
-    Vector2 tw = MeasureTextEx(arc->font, header, 14, 2);
-    DrawShellTextStyle(arc->font, header, (w - tw.x) * 0.5f, 12, 14, ARC_COLOR_GREEN);
+    /* Cabeçalho + layout compacto para 128x96 */
+    const char* header = "ARC_SHELL";
+    float fs = 10.0f;
+    Vector2 tw = MeasureTextEx(arc->font, header, fs, 1);
+    DrawShellTextStyle(arc->font, header, (w - tw.x) * 0.5f, 6, fs, ARC_COLOR_GREEN);
 
-    /* Data/hora: usa GetTime() para evitar dependência de time.h (conflitos em alguns builds). */
+    /* Data/hora */
     {
         float t = (float)GetTime();
         int min = ((int)t / 60) % 60;
         int hour = ((int)t / 3600) % 24;
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%02d:%02d 08/02/2226", hour, min);
-        DrawShellTextStyle(arc->font, buf, 14, 14, 11, WHITE);
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%02d:%02d", hour, min);
+        DrawShellTextStyle(arc->font, buf, 6, 20, 8, WHITE);
     }
 
-    /* Linhas de output (simuladas) */
+    /* Linhas de output (compactas) */
     {
         const char* staticLines[] = {
-            "> STATUS: ALL RIGHT",
-            "> LOCATION: IN ORBIT",
-            "> ENGINE: IDLE",
-            "> DOORS: SEALED",
-            "> TARGETS: PROXIMA CENTAURI B",
-            "> RISK LEVEL: [1]",
-            "> ANOMALIES: NONE"
+            "> STATUS: OK", "> LOC: ORBIT", "> ENGINE: IDLE",
+            "> DOORS: SEALED", "> RISK: [1]"
         };
         int n = (int)(sizeof(staticLines) / sizeof(staticLines[0]));
-        float lineY = 38;
-        float lineH = 14;
-        for (int i = 0; i < n && lineY + lineH < h - 36; i++) {
-            DrawShellTextStyle(arc->font, staticLines[i], 14, lineY, 11, ARC_COLOR_GREEN);
+        float lineY = 32;
+        float lineH = 10;
+        for (int i = 0; i < n && lineY + lineH < h - 22; i++) {
+            DrawShellTextStyle(arc->font, staticLines[i], 6, lineY, 8, ARC_COLOR_GREEN);
             lineY += lineH;
         }
     }
 
-    /* Linha do prompt */
-    float promptY = h - 28;
-    DrawLineEx((Vector2){12, promptY - 6}, (Vector2){w - 12, promptY - 6}, 1, ARC_COLOR_GREEN);
-    DrawShellTextStyle(arc->font, "operator-301@ARC_Shell>", 14, promptY, 12, ARC_COLOR_GREEN);
+    /* Prompt */
+    float promptY = h - 18;
+    DrawLineEx((Vector2){6, promptY - 4}, (Vector2){w - 6, promptY - 4}, 1, ARC_COLOR_GREEN);
+    DrawShellTextStyle(arc->font, "operator@ARC>", 6, promptY, 8, ARC_COLOR_GREEN);
 
     /* Cursor piscante */
     if ((int)(arc->animTimer * 2.5f) % 2 == 0) {
-        float cw = MeasureTextEx(arc->font, "operator-301@ARC_Shell>", 12, 2).x;
-        DrawRectangle(14 + (int)cw + 4, (int)promptY + 2, 10, 14, ARC_COLOR_GREEN);
+        float cw = MeasureTextEx(arc->font, "operator@ARC>", 8, 1).x;
+        DrawRectangle(6 + (int)cw + 2, (int)promptY + 1, 6, 10, ARC_COLOR_GREEN);
     }
 
     EndTextureMode();

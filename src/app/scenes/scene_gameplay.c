@@ -15,7 +15,7 @@
 #include "core/world/voxel_world.h"
 #include "core/world/world_config.h"
 #include "core/gameplay/ship.h"
-#include "app/ui/arc_terminal_screen.h"
+#include "app/ui/arc_terminal_full.h"
 #include <raylib.h>
 #include <raymath.h>
 #if defined(USE_RLGL)
@@ -133,6 +133,9 @@ static bool g_shipModelLoaded = false;
 /* CRT overlay: renderiza gameplay num RT e desenha por cima com shader (capinha sem afetar nada). */
 static RenderTexture2D g_crtTarget = {0};
 static Shader g_crtShader = {0};
+/* CRT do overlay do terminal ARC (crt.fs do terminal-with-raylib). */
+static Shader g_terminalCrtShader = {0};
+static int g_terminalCrtTimeLoc = -1;
 
 /* Mundo Beware: streaming por faixa Z e corredor; substitui mapa debug quando ativo. */
 static VoxelWorld* g_voxelWorld = NULL;
@@ -143,11 +146,10 @@ static Ship g_ship;
 static bool g_standingOnShip = false;  /* true = player em cima da nave; herda delta. */
 static bool g_isOnLadder = false;       /* true = player na escada; sobe automaticamente, gravidade desativada. */
 
-/* Terminal ARC no pilar da nave: tela renderizada em RT, exibida em face do pilar. */
-static ArcTerminalScreen* g_arcTerminal = NULL;
-static Mesh g_shipPillarScreenMesh = {0};
-static Material g_shipPillarScreenMat = {0};
-static bool g_shipPillarScreenReady = false;
+/* Terminal ARC: overlay 1600x920 ao pressionar E perto do monitor. */
+static ArcTerminalFull* g_arcTerminalFull = NULL;
+static bool g_nearArcMonitor = false;
+#define MONITOR_INTERACT_DIST 2.5f
 
 /* Colisão: 3 passes (Y, X, Z) para evitar blocos “puxando” o player.
  * Gravidade só no eixo Y. Colidimos com todo bloco sólido (exceto ar). */
@@ -723,18 +725,18 @@ void Scene_Gameplay_Shutdown(void) {
         UnloadShader(g_crtShader);
         g_crtShader = (Shader){0};
     }
+    if (g_terminalCrtShader.id != 0) {
+        UnloadShader(g_terminalCrtShader);
+        g_terminalCrtShader = (Shader){0};
+        g_terminalCrtTimeLoc = -1;
+    }
     if (g_voxelWorld) {
         VoxelWorld_Destroy(g_voxelWorld);
         g_voxelWorld = NULL;
     }
-    if (g_arcTerminal) {
-        ArcTerminalScreen_Destroy(g_arcTerminal);
-        g_arcTerminal = NULL;
-    }
-    if (g_shipPillarScreenReady) {
-        UnloadMesh(g_shipPillarScreenMesh);
-        UnloadMaterial(g_shipPillarScreenMat);
-        g_shipPillarScreenReady = false;
+    if (g_arcTerminalFull) {
+        ArcTerminalFull_Destroy(g_arcTerminalFull);
+        g_arcTerminalFull = NULL;
     }
 
     // Reseta flags
@@ -800,6 +802,12 @@ void Scene_Gameplay_Init(void) {
         if (g_crtShader.id == 0) {
             TraceLog(LOG_WARNING, "Gameplay: CRT overlay shader nao carregado (tentou %s).", crtPath);
         }
+        /* CRT do terminal ARC (crt.fs do terminal-with-raylib). */
+        const char* terminalCrtPath = GetAssetPath("assets/shaders/crt.fs");
+        g_terminalCrtShader = LoadShader(0, terminalCrtPath);
+        if (g_terminalCrtShader.id != 0) {
+            g_terminalCrtTimeLoc = GetShaderLocation(g_terminalCrtShader, "time");
+        }
     }
     
     // Inicializa câmera FPS estilo Minecraft
@@ -831,16 +839,10 @@ void Scene_Gameplay_Init(void) {
         TraceLog(LOG_WARNING, "Ship model not found: %s (lobby will show no ship)", shipPath);
     }
 
-    /* Terminal ARC no pilar da nave: tela em face do pilar (só com streaming world). */
+    /* Terminal ARC: overlay completo boot/auth/loading/shell ao pressionar E. */
     if (g_useStreamingWorld) {
-        g_arcTerminal = ArcTerminalScreen_Create(256, 192);
-        if (g_arcTerminal && ArcTerminalScreen_IsValid(g_arcTerminal)) {
-            /* Mesh: plano vertical (face +Z), tamanho ~0.28 x 0.36 m — visível para personagem em pé. */
-            g_shipPillarScreenMesh = GenMeshPlane(0.28f, 0.36f, 1, 1);
-            g_shipPillarScreenMat = LoadMaterialDefault();
-            g_shipPillarScreenReady = true;
-            TraceLog(LOG_INFO, "ARC terminal screen on ship pillar initialized.");
-        }
+        g_arcTerminalFull = ArcTerminalFull_Create();
+        if (g_arcTerminalFull) TraceLog(LOG_INFO, "ARC terminal full initialized.");
     }
 
     // Inicializa sistema de iluminação direcional fake
@@ -1058,6 +1060,40 @@ void Scene_Gameplay_Update(float dt) {
 
     if (g_mode != GP_PLAYING) return;
 
+    /* Terminal ARC: E perto do monitor = toggle overlay. */
+    if (g_arcTerminalFull && g_useStreamingWorld && g_voxelWorld) {
+        float mx = g_ship.position.x, mz = g_ship.position.z + 1.5f;
+        float dx = g_playerPhysics.x - mx, dz = g_playerPhysics.z - mz;
+        float distSq = dx * dx + dz * dz;
+        bool nearMonitor = (distSq < MONITOR_INTERACT_DIST * MONITOR_INTERACT_DIST);
+
+        if (ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+            int k = GetCharPressed();
+            while (k > 0) {
+                ArcTerminalFull_ProcessKey(g_arcTerminalFull, k);
+                k = GetCharPressed();
+            }
+            k = GetKeyPressed();
+            while (k != 0) {
+                ArcTerminalFull_ProcessKey(g_arcTerminalFull, k);
+                k = GetKeyPressed();
+            }
+            if (IsKeyPressed(KEY_E)) {
+                ArcTerminalFull_Close(g_arcTerminalFull);
+            }
+            g_fpsCamera.fov = g_settings.fov;
+            g_fpsCamera.position.x = g_playerPhysics.x;
+            g_fpsCamera.position.y = g_playerPhysics.y + PLAYER_EYE_HEIGHT;
+            g_fpsCamera.position.z = g_playerPhysics.z;
+            return;  /* Não processa movimento quando terminal aberto. */
+        } else if (nearMonitor && IsKeyPressed(KEY_E)) {
+            ArcTerminalFull_Open(g_arcTerminalFull);
+        }
+        g_nearArcMonitor = nearMonitor;
+    } else {
+        g_nearArcMonitor = false;
+    }
+
     g_fpsCamera.fov = g_settings.fov;
     g_fpsCamera.sensitivity = g_settings.mouseSensitivity;
 
@@ -1241,8 +1277,8 @@ void Scene_Gameplay_Update(float dt) {
         }
     }
     
-    if (g_arcTerminal) {
-        ArcTerminalScreen_Update(g_arcTerminal, dt);
+    if (g_arcTerminalFull) {
+        ArcTerminalFull_Update(g_arcTerminalFull, dt);
     }
     if (g_useStreamingWorld && g_voxelWorld) {
         WorldBeware_Update(&g_worldBeware, g_ship.position.x, g_ship.position.z, 0.0f, g_playerPhysics.x, g_playerPhysics.z);
@@ -1325,6 +1361,11 @@ static void DrawCrosshair(void) {
 
 void Scene_Gameplay_Draw(void) {
     if (!g_initialized) return;
+
+    /* Terminal ARC: renderiza no RT próprio somente quando aberto. */
+    if (g_arcTerminalFull && ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+        ArcTerminalFull_Render(g_arcTerminalFull);
+    }
 
     BeginTextureMode(g_crtTarget);
     ClearBackground(BLACK);
@@ -1476,39 +1517,22 @@ void Scene_Gameplay_Draw(void) {
 
     if (g_useStreamingWorld && g_voxelWorld) {
         Ship_Draw(&g_ship);
-
-        /* Pilar com tela ARC na nave: pilar cinza + quad com terminal na face frontal (+Z). */
-        if (g_arcTerminal && g_shipPillarScreenReady) {
-            float sx = g_ship.position.x;
-            float sz = g_ship.position.z;
-            float deckTop = g_ship.hullBox.max.y;
-            float pillarHalfX = 0.15f, pillarHalfY = 0.5f, pillarHalfZ = 0.15f;
-            float pillarCenterY = deckTop + pillarHalfY;  /* Base do pilar no deck, 1m de altura. */
-            float pillarCenterZ = sz + 1.2f;
-
-            /* Pilar: cubo cinza escuro em cima do deck. */
-            DrawCube((Vector3){sx, pillarCenterY, pillarCenterZ},
-                     pillarHalfX * 2.0f, pillarHalfY * 2.0f, pillarHalfZ * 2.0f,
-                     (Color){60, 60, 65, 255});
-
-            /* Tela: renderiza terminal no RT e desenha em quad vertical na face +Z do pilar. */
-            ArcTerminalScreen_RenderToTexture(g_arcTerminal);
-            Texture2D tex = ArcTerminalScreen_GetTexture(g_arcTerminal);
-            if (tex.id != 0) {
-                SetMaterialTexture(&g_shipPillarScreenMat, MATERIAL_MAP_DIFFUSE, tex);
-                float screenZ = pillarCenterZ + pillarHalfZ + 0.005f;
-                float screenCenterY = deckTop + 0.5f;  /* Centro da tela à altura do peito (personagem em pé). */
-                Matrix rotX = MatrixRotateX(-90.0f * DEG2RAD);
-                Matrix trans = MatrixTranslate(sx, screenCenterY, screenZ);
-                Matrix transform = MatrixMultiply(rotX, trans);
-                DrawMesh(g_shipPillarScreenMesh, g_shipPillarScreenMat, transform);
-            }
-        }
     }
 
     if (g_atmosphere.fog.enabled && g_fogShader.id != 0) {
         EndShaderMode();
     }
+#if defined(USE_RLGL)
+    rlDrawRenderBatchActive();
+#endif
+
+        /* Monitor na nave: cubo cinza (terminal físico); interação por proximidade. */
+        if (g_useStreamingWorld && g_voxelWorld) {
+            float deckTop = g_ship.hullBox.max.y;
+            float monY = deckTop + 0.5f;
+            float monZ = g_ship.position.z + 1.5f;
+            DrawCube((Vector3){g_ship.position.x, monY, monZ}, 0.3f, 1.0f, 0.3f, (Color){50, 55, 60, 255});
+        }
 #if defined(USE_RLGL)
     rlDrawRenderBatchActive();  // flush sólidos/fog antes do passe de wireframe
 #endif
@@ -1709,6 +1733,14 @@ void Scene_Gameplay_Draw(void) {
         }
         if (g_showDirection)
             Debug_DrawCompass(&g_fpsCamera);
+        if (g_nearArcMonitor && !ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+            const char* hint = "Press E to open Terminal";
+            Vector2 hs = MeasureTextEx(g_consolaFont, hint, 18, 1);
+            float hx = ((float)g_crtTarget.texture.width - hs.x) / 2.0f;
+            float hy = (float)g_crtTarget.texture.height * 0.15f;
+            DrawRectangle((int)(hx - 12), (int)(hy - 4), (int)(hs.x + 24), (int)(hs.y + 12), (Color){0, 0, 0, 180});
+            DrawTextEx(g_consolaFont, hint, (Vector2){hx, hy}, 18, 1, (Color){51, 255, 51, 255});
+        }
         DrawCrosshair();
         DrawText("ESC - Pause", 20, GetScreenHeight() - 30, 16, Fade(RAYWHITE, 0.5f));
     }
@@ -1730,6 +1762,23 @@ void Scene_Gameplay_Draw(void) {
             EndShaderMode();
         } else {
             DrawTextureRec(g_crtTarget.texture, srcRect, (Vector2){0, 0}, WHITE);
+        }
+        /* Terminal ARC overlay: 1600x920 centralizado com efeito CRT (crt.fs do terminal-with-raylib). */
+        if (g_arcTerminalFull && ArcTerminalFull_IsOpen(g_arcTerminalFull)) {
+            Texture2D tex = ArcTerminalFull_GetTexture(g_arcTerminalFull);
+            if (tex.id != 0) {
+                Rectangle ovRect;
+                ArcTerminalFull_GetOverlayRect(GetScreenWidth(), GetScreenHeight(), &ovRect);
+                Rectangle texSrc = { 0, 0, (float)tex.width, -(float)tex.height };
+                if (g_terminalCrtShader.id != 0) {
+                    float t = (float)GetTime();
+                    if (g_terminalCrtTimeLoc >= 0)
+                        SetShaderValue(g_terminalCrtShader, g_terminalCrtTimeLoc, &t, SHADER_UNIFORM_FLOAT);
+                    BeginShaderMode(g_terminalCrtShader);
+                }
+                DrawTextureRec(tex, texSrc, (Vector2){ovRect.x, ovRect.y}, WHITE);
+                if (g_terminalCrtShader.id != 0) EndShaderMode();
+            }
         }
     }
     EndDrawing();

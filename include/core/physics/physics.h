@@ -12,7 +12,12 @@ typedef struct {
     float width, height, depth; // Dimensões do AABB
     bool onGround;          // Está no chão?
     bool isFlying;          // Modo voo (debug)
+    bool isSafe;            // Dentro da zona segura da nave (deck; oxigênio)
 } PhysicsBody;
+
+/* Player: y = pé (base do AABB); minY = y, maxY = y + PLAYER_HEIGHT. */
+#define PLAYER_HEIGHT      1.80f   /* Altura total do corpo. */
+#define PLAYER_EYE_HEIGHT  1.62f   /* Altura dos olhos (câmera) ~90% da altura. */
 
 /* Física estilo Minecraft: gravidade só no eixo Y */
 #define GRAVITY -32.0f        /* ~Minecraft: blocks/s² para baixo */

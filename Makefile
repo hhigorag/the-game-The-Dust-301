@@ -27,7 +27,7 @@ CFLAGS = -Wall -Wextra -std=c99 -O2 -D_DEFAULT_SOURCE -DUSE_ENET -DUSE_RLGL
 CXXFLAGS = -Wall -Wextra -std=c++11 -O2 -D_DEFAULT_SOURCE
 
 # Includes
-INCLUDES = -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/core -I$(INCLUDE_DIR)/app -I$(RAYLIB_INCLUDE) -I$(ENET_INCLUDE)
+INCLUDES = -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/core -I$(INCLUDE_DIR)/app -I$(INCLUDE_DIR)/app/ui -I$(RAYLIB_INCLUDE) -I$(ENET_INCLUDE)
 LDFLAGS = -L$(RAYLIB_LIB) -L$(ENET_BUILD)
 
 # Bibliotecas
@@ -75,7 +75,17 @@ APP_SRC_C = $(SRC_DIR)/app/app.c \
             $(SRC_DIR)/app/render/atmosphere.c \
             $(SRC_DIR)/app/render/lighting.c \
             $(SRC_DIR)/app/ui/scifi_terminal.c \
-            $(SRC_DIR)/app/ui/arc_terminal_screen.c
+            $(SRC_DIR)/app/ui/arc_clim.c \
+            $(SRC_DIR)/app/ui/arc_terminal_full.c \
+            $(SRC_DIR)/app/ui/arc_terminal/arc_common.c \
+            $(SRC_DIR)/app/ui/arc_terminal/arc_utils.c \
+            $(SRC_DIR)/app/ui/arc_terminal/arc_render.c \
+            $(SRC_DIR)/app/ui/arc_terminal/boot_logic.c \
+            $(SRC_DIR)/app/ui/arc_terminal/boot_render.c \
+            $(SRC_DIR)/app/ui/arc_terminal/login_logic.c \
+            $(SRC_DIR)/app/ui/arc_terminal/login_render.c \
+            $(SRC_DIR)/app/ui/arc_terminal/shell_logic.c \
+            $(SRC_DIR)/app/ui/arc_terminal/shell_render.c
 
 # Arquivos fonte App (C++)
 APP_SRC_CPP = $(SRC_DIR)/app/camera/fps_camera.cpp
@@ -112,6 +122,7 @@ $(BUILD_DIR):
 	@if not exist "$(BUILD_DIR)\app\input" mkdir "$(BUILD_DIR)\app\input"
 	@if not exist "$(BUILD_DIR)\app\render" mkdir "$(BUILD_DIR)\app\render"
 	@if not exist "$(BUILD_DIR)\app\ui" mkdir "$(BUILD_DIR)\app\ui"
+	@if not exist "$(BUILD_DIR)\app\ui\arc_terminal" mkdir "$(BUILD_DIR)\app\ui\arc_terminal"
 	@if not exist "$(BUILD_DIR)\app\camera" mkdir "$(BUILD_DIR)\app\camera"
 
 # Compila arquivos objeto C

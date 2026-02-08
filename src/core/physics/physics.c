@@ -8,11 +8,12 @@ void PhysicsBody_Init(PhysicsBody* body, float x, float y, float z) {
     body->x = x;
     body->y = y;
     body->z = z;
-    body->width = 0.6f;   // Largura do player
-    body->height = 1.8f;  // Altura do player
-    body->depth = 0.6f;   // Profundidade do player
+    body->width = 0.6f;
+    body->height = PLAYER_HEIGHT;  /* y = pé; maxY = y + height. */
+    body->depth = 0.6f;
     body->onGround = false;
     body->isFlying = false;
+    body->isSafe = false;
 }
 
 void PhysicsBody_ApplyForce(PhysicsBody* body, float fx, float fy, float fz) {

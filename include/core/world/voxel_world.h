@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "world_config.h"
+#include "event_system.h"
+#include "structure_spawner.h"
 
 // Forward declarations
 typedef struct Chunk Chunk;
@@ -53,8 +56,26 @@ Voxel VoxelWorld_GetBlock(VoxelWorld* world, int32_t x, int32_t y, int32_t z);
 // Define o bloco em coordenadas globais (x, y, z)
 void VoxelWorld_SetBlock(VoxelWorld* world, int32_t x, int32_t y, int32_t z, Voxel voxel);
 
-// Atualiza streaming de chunks ao redor de uma posição
+// Atualiza streaming de chunks ao redor de uma posição (legado; preferir UpdateStreamingFromRange)
 void VoxelWorld_UpdateStreaming(VoxelWorld* world, float playerX, float playerY, float playerZ, int32_t loadRadius);
+
+/* Atualiza streaming por faixa macro (minMacroZ..maxMacroZ) e corredor centrado em centerX_m.
+ * Nunca descarrega o chunk que contém (playerX, playerZ). Corredor = 20 chunks de largura (cada lado). */
+void VoxelWorld_UpdateStreamingFromRange(VoxelWorld* world, int32_t minMacroZ, int32_t maxMacroZ, float centerX_m, float playerX, float playerZ);
+
+/* Contexto de geração por chunk (Segment, Event, Structure, corridor, threat). */
+typedef struct ChunkGenContext {
+    uint64_t worldSeed;
+    int32_t chunkX, chunkZ;
+    SegmentType segType;
+    float corridorCenterX_m;
+    SegmentEventType eventType;
+    LargeStructureType structType;
+    float threatLevel;
+} ChunkGenContext;
+
+/* Gera o conteúdo do chunk com base no contexto (chão, corredor navegável, borda mortal). */
+void VoxelWorld_GenerateChunk(VoxelWorld* vw, Chunk* c, const ChunkGenContext* ctx);
 
 // Retorna estatísticas do mundo
 void VoxelWorld_GetStats(VoxelWorld* world, int32_t* loadedChunks, int32_t* generatingChunks);
